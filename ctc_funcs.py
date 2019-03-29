@@ -173,17 +173,11 @@ def rebin_spec_map(spec_map,wls,**kwargs):
     En_wls = 1240/wls[ind_min:ind_max]
     icorr = wls[ind_min:ind_max]**2
 
-    En = np.linspace(En_wls[0],En_wls[ne-1],ne)
+    En = np.linspace(En_wls[-1],En_wls[0],ne)
     En_spec_map = np.zeros((nv,nh,ne))
 
-    for kk in range(0,nh):
-        for jj in range(0,nv):
-            En_spec_map[jj,kk,:] = sp.interpolate.griddata(En_wls,spec_map[jj,kk,ind_min:ind_max]*icorr,En,method='cubic')
-
-    if En[ne-1] < En[0]:
-        print('Energy in descending order - reversing matrices.')
-        En = np.flip(En)
-        En_spec_map = En_spec_map[:,:,::-1].copy()
+    spec_map_interp = sp.interpolate.interp1d(En_wls, spec_map[:,:,ind_min:ind_max], axis=-1)
+    En_spec_map = spec_map_interp(En)
 
     print(str(nv) + ' x ' + str(nh) + ' spatial x ' + str(ne) + ' spectral points')
 
