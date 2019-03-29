@@ -15,10 +15,10 @@ if __name__ == '__main__':
         if fnmatch.fnmatch(fname,'*.h5'):
             try:
                 fh = h5.File(fname)
-                sample = getSample(fh)
+                sample = getSample(fh).strip()
                 if sample == '':
                     sample = 'no_name'
-                print(fname + ' ' + sample)
+                print(fname,sample)
                 fh.close()
             except Exception as err:
                 print('Could not open ' + fname)
@@ -32,3 +32,5 @@ if __name__ == '__main__':
                 os.rename(path + '\\' + fname, path + '\\' + sample + '\\' + fname)
             except Exception as err:
                 print('Could not move ' + fname)
+
+            print()
