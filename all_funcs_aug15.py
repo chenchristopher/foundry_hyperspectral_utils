@@ -23,16 +23,32 @@ def printname(name):
     #executable for hdf5.visit
     print(name)
 
-def sortfnames(dir=''):
-#sorts files in curent dir
-#can be generalised for future use now only separtes
-    a=os.listdir(os.path.join(os.getcwd(),dir))
+
+def sortfnames(dir='.'):
+    """
+    Returns str arrays of all files in the given directory.
+
+    Updated by Chris to take a path from the keyword argument.
+
+    Keyword Args:
+        dir (str): Path to the directory of interest.
+
+    Returns:
+        tuple:  tuple containing lists of strings for each of the following
+                file types
+                    *sync_raster_scan.h5    sync_raster_scan_h5
+                    *hyperspec_cl.h5        hyperspec_cl_h5
+                    *.h5                    HDF5 files
+                    *.txt                   text files
+                    *.sif                   sif files
+    """
+    a = os.listdir(os.path.abspath(dir))
     txts = [i for i in a if i.endswith('.txt')]
     sifs = [i for i in a if i.endswith('.sif')]
     hdf5s = [i for i in a if i.endswith('.h5')]
     clmaps = [i for i in a if i.endswith('hyperspec_cl.h5')]
     clims = [i for i in a if i.endswith('sync_raster_scan.h5')]
-    return clmaps, clims, hdf5s, txts, sifs
+    return (clmaps, clims, hdf5s, txts, sifs)
 
 def sizerasterscans(path,flist):
     for fname in flist:
