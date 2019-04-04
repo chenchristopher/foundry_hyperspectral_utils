@@ -2,21 +2,14 @@
 #    imports    #
 #################
 import os
-#import sys
 import scipy as sp
-#import scipy.misc
-#import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gspec
 import h5py as h5
 import numpy as np
 import pandas as pd
 from ipywidgets import widgets
-import IPython
 import seaborn as sns
-#import hyperspy.api as hs
-#import hyperspy_gui_ipywidgets as hsgui
-from skimage.measure import compare_ssim as ssim
 from mpl_toolkits.axes_grid1 import host_subplot
 
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -95,12 +88,12 @@ def load_uvpl_map(fname):
     sample = str(f['app']['settings'].attrs['sample'])
     wls = np.array(f['measurement'][measurement_name]['wls'])
     spec_map = np.array(f['measurement'][measurement_name]['spec_map'])
-    h_array = np.array(f['measurement'][measurement_name]['h_array'])*1e3
-    v_array = np.array(f['measurement'][measurement_name]['v_array'])*1e3
+    h_array = np.array(f['measurement'][measurement_name]['h_array'])*1e-3
+    v_array = np.array(f['measurement'][measurement_name]['v_array'])*1e-3
     nh = int(f['measurement'][measurement_name]['settings'].attrs['Nh'])
     nv = int(f['measurement'][measurement_name]['settings'].attrs['Nv'])
-    dh = float(f['measurement'][measurement_name]['settings'].attrs['dh'])*1e3
-    dv = float(f['measurement'][measurement_name]['settings'].attrs['dv'])*1e3
+    dh = float(f['measurement'][measurement_name]['settings'].attrs['dh'])*1e-3
+    dv = float(f['measurement'][measurement_name]['settings'].attrs['dv'])*1e-3
     nf = np.size(wls)
     spec_map = np.reshape(spec_map,(nv,nh,nf))
     f.close()
@@ -155,7 +148,9 @@ def rebin_spec_map(spec_map,wls,**kwargs):
         ind_min = 0
 
     if 'spec_max' in kwargs:
-        ind_max = np.searchsorted(wls,kwargs['spec_max'])
+        ind_max = np.searchsorted(wls, kwargs['spec_max'])
+        if ind_max == np.size(wls):
+            ind_max = ind_max - 1
     elif 'ind_max' in kwargs:
         ind_max = kwargs['max']
     else:
@@ -176,7 +171,7 @@ def rebin_spec_map(spec_map,wls,**kwargs):
     En = np.linspace(En_wls[-1],En_wls[0],ne)
     En_spec_map = np.zeros((nv,nh,ne))
 
-    spec_map_interp = sp.interpolate.interp1d(En_wls, spec_map[:,:,ind_min:ind_max], axis=-1)
+    spec_map_interp = sp.interpolate.interp1d(En_wls, spec_map[:,:,ind_min:ind_max]*icorr, axis=-1)
     En_spec_map = spec_map_interp(En)
 
     print(str(nv) + ' x ' + str(nh) + ' spatial x ' + str(ne) + ' spectral points')
@@ -335,7 +330,7 @@ def plot_si_bands(spec_im,cpath,fname,*args,**kwargs):
     f_h.suptitle(cpath + fname)
     return f_h
 
-def plot_spec_bands(spec_im,spec,xvals,yvals,cpath,fname,*args,**kwargs):
+def plot_spec_bands(spec_im,cpath,fname,*args,**kwargs):
     """Short summary.
 
     Parameters
@@ -382,7 +377,7 @@ def plot_spec_bands(spec_im,spec,xvals,yvals,cpath,fname,*args,**kwargs):
     f_h=plt.figure()
     # disp defaults
 
-    if 'percentile' in kwargs.keys() :
+    if 'percentile' in kwargs.keys():
         percentile = kwargs['percentile']
     else:
         percentile = 5
@@ -402,33 +397,13 @@ def plot_spec_bands(spec_im,spec,xvals,yvals,cpath,fname,*args,**kwargs):
 
     subplotindxs = np.reshape(np.arange(0,no_of_cols*no_of_rows),[no_of_rows,no_of_cols])
 
-    if spec[0] > spec[1]:
-            print('Reversed')
-
-    X,Y = np.meshgrid(yvals,xvals)
-
     i=0
     for arg in args:
-        band_min = np.searchsorted(spec,float(arg[0]))
-        band_max = np.searchsorted(spec,float(arg[1]))
         print('Desired spectral range: ' + str(arg[0]) + ' to ' + str(arg[1]))
-        print('Integrating indicies from ' + str(band_min) + ' to ' + str(band_max))
-        band=np.sum(a=spec_im[:,:,band_min:band_max],axis=2)
         coord=np.where(subplotindxs==i)
         plt.subplot(gs[coord[0][0],coord[1][0]])
         plt.title(arg[3] + ' ' + str(arg[0:2]))
-        #img = plt.imshow(band,cmap=arg[2],
-        #    vmin=np.percentile(band,percentile),
-        #    vmax=np.percentile(band,100-percentile))
-        img = plt.pcolormesh(X,Y,band,cmap=arg[2],
-            vmin=np.percentile(band,percentile),
-            vmax=np.percentile(band,100-percentile),
-            shading='flat')
-        plt.axis('equal')
-        plt.xlabel('$\mu$m')
-        plt.ylabel('$\mu$m')
-        #plt.colorbar()
-        colorbar(img,orientation='horizontal',position='bottom')
+        spec_im[arg[0]:arg[1]].plot()
         i = i + 1
 
     f_h.suptitle(cpath + fname)
@@ -777,8 +752,8 @@ def plot_hs_results(loadings,factors,hs_axes,no_of_bands=4,title='',cmap='plasma
             img = plt.pcolormesh(X,Y,loading_list[lx].data,cmap=cmap,
                 shading='flat')
             plt.title(lx)
-            plt.xlabel('$\mu$m')
-            plt.ylabel('$\mu$m')
+            plt.xlabel('m')
+            plt.ylabel('m')
             plt.axis('equal')
             colorbar(img)
             i = i + 1

@@ -194,7 +194,7 @@ def load_SI(path,fname,outputmode = 'dictofdicts',**kwargs) :
     se_imgs=file1['measurement/hyperspec_cl/adc_map']
     ctr_imgs=file1['measurement/hyperspec_cl/ctr_map']
     spec_imgs=file1['measurement/hyperspec_cl/spec_map']
-    wavelength=file1['measurement/hyperspec_cl/wls']
+    wavelength=np.array(file1['measurement/hyperspec_cl/wls'])
 
     #remove singular dimetions
     se_im = np.squeeze(se_imgs)
@@ -211,18 +211,18 @@ def load_SI(path,fname,outputmode = 'dictofdicts',**kwargs) :
     if outputmode == 'dictofdicts':
         dict_of_dicts = {'filename':fname,
                         'path':path,
-                        'remcon': remcon_dict,
-                        'daq': daq_dict,
-                        'data':data_dict,
-                        'andor':andor_dict,
-                        'acton':acton_dict,
-                        'summary':shortlist,
-                        'se': se_im,
-                        'cntr' : ctr_im,
-                        'SI': spec_im,
-                        'wavelength': wavelength,
-                        'sum1D': sum_spec,
-                        'sum2D':sum_im}
+                        'remcon': remcon_dict.copy(),
+                        'daq': daq_dict.copy(),
+                        'data':data_dict.copy(),
+                        'andor':andor_dict.copy(),
+                        'acton':acton_dict.copy(),
+                        'summary':shortlist.copy(),
+                        'se': se_im.copy(),
+                        'cntr' : ctr_im.copy(),
+                        'SI': spec_im.copy(),
+                        'wavelength': wavelength.copy(),
+                        'sum1D': sum_spec.copy(),
+                        'sum2D':sum_im.copy()}
         return dict_of_dicts
     elif outputmode== 'short':
         return se_im,ctr_im,spec_im,shortlist
@@ -419,10 +419,11 @@ def new_si_summary(data,percentile=1,printing='',display='keep',**kwargs):
 #      plot_si_sprint(se_im,ctr_im,spec_im,cpath,fname
 #                     percentile=3)
 
+    outname = os.path.join(data['path'], data['filename'])[:-3]
 
     f_h=plt.figure(figsize=(16,6))
 
-    f_h.suptitle(data['path'] + data['filename'])
+    f_h.suptitle(outname)
 
    #analogs
     ax_ad=[(3,5,2),(3,5,3),(3,5,4),(3,5,5)]
@@ -464,15 +465,14 @@ def new_si_summary(data,percentile=1,printing='',display='keep',**kwargs):
     plt.subplot(3,5,(13,15)),
     plt.plot(data['wavelength'],data['sum1D']/no_of_specs)
 
-    if printing=='pdf':
-        outname =data['path'] + data['filename'][:-5]+'.pdf'
-        plt.savefig(outname,dpi=150, orientation='landscape')
+    if printing == 'pdf':
+        plt.savefig(outname+'.pdf', dpi=150, orientation='landscape')
 
-    if display!='keep':
+    if display != 'keep':
         plt.close()
         return
     else:
-            return f_h
+        return f_h
 
     return f_h
 
@@ -480,10 +480,10 @@ def new_rs_summary(data,percentile=1,printing='',display='keep',**kwargs):
 #plots summary of SI with its images in a fourplot
 #usage:
 #
-
+    outname = os.path.join(data['path'], data['filename'])[:-3]
     f_h=plt.figure(figsize=(11,6),dpi=150)
 
-    f_h.suptitle([data['path'] + data['filename']])
+    f_h.suptitle(outname)
 
     #analogs
     ax_ad=[(2,5,2),(2,5,3),(2,5,4),(2,5,5)]
@@ -518,8 +518,7 @@ def new_rs_summary(data,percentile=1,printing='',display='keep',**kwargs):
     plt.axis('off')
 
     if printing == 'pdf':
-        outname = data['path'] + data['filename']+'.pdf'
-        plt.savefig(outname,dpi=150, orientation='landscape')
+        plt.savefig(outname+'.pdf',dpi=150, orientation='landscape')
 
     if display!='keep':
         plt.close()
