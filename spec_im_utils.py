@@ -68,7 +68,7 @@ def plot_si_bands(spec_im, *args, **kwargs):
 def gui_fname(dir=None):
     """Select a file via a dialog and return the file name"""
     if dir is None: dir = '../'
-    fname = QtWidgets.QFileDialog.getOpenFileName(None, "select data file...", dir, filter="h5 files (*hyperspec_cl.h5)")
+    fname = QtWidgets.QFileDialog.getOpenFileName(None, "select data file...", dir, filter="h5 files (*.h5)")
     return fname[0]
 
 def plot_cl_summary(spec_im):
@@ -107,13 +107,33 @@ def plot_cl_summary(spec_im):
     plt.subplot(3,3,(8,9))
     spec_im.plot_spec()
     plt.text(spec_im.spec_x_array.min(), spec_im.get_spec(sum=True).min(),
-             spec_im.dat['summary']['description'])
+             spec_im.description)
 
     f0.set_size_inches(10,10)
     f0.tight_layout(h_pad=1)
 
     return f0
 
+
+def plot_pl_summary(specim):
+    assert isinstance(specim, si.PLSpectralImage)
+    f = plt.figure()
+    plt.subplot(2, 3, 1)
+    specim.plot()
+
+    plt.subplot(2, 3, (2, 3))
+    specim.plot_spec()
+
+    esi = specim.to_energy()
+    plt.subplot(2, 3, 4)
+    esi.plot()
+
+    plt.subplot(2, 3, (5, 6))
+    esi.plot_spec()
+
+    plt.suptitle(specim.name)
+    plt.tight_layout(h_pad=1)
+    return f
 
 def plot_hs_results(loadings, factors, spec_im, no_of_bands=4, title='',
                     cmap='plasma'):

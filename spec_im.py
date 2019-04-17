@@ -2,12 +2,50 @@ from collections.abc import Sequence
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from all_funcs_aug15 import load_SI, load_RS
 from matplotlib_scalebar.scalebar import ScaleBar
-from ctc_funcs import load_uvpl_map
 from hyperspy.signals import Signal1D
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+import h5py as h5
 import scipy as sp
+from hyperspy.misc.utils import DictionaryTreeBrowser
+import re
+from copy import copy
+
+
+def h5_to_dictionary(fh, tree=None, level='', debug=False):
+    if tree is None:
+        if debug:
+            print('Creating DictionaryTreeBrowser')
+        tree = DictionaryTreeBrowser()
+    elif level == '' and debug:
+        print('At root level')
+    else:
+        if debug:
+            print('function called at level', level)
+        level += '.'
+
+    for key in list(fh.attrs.keys()):
+        val = fh.attrs[key]
+        tree.set_item(level + key, copy(val))
+        if debug:
+            print('level %s, %s: %s' % (level, key, val))
+
+    for (key, desc) in list(fh.items()):
+        if debug:
+            print(key, desc)
+        key = str(key)
+        desc = str(desc)
+        if '(0 members)' in desc:
+            if debug:
+                print('No members of level %s, %s' % (level, key))
+            continue
+        elif 'HDF5 dataset' in desc:
+            tree.set_item(level + key, np.squeeze(fh[key]).copy())
+        elif 'HDF5 group' in desc:
+            if debug:
+                print('Recursive call at level %s, %s' % (level, key))
+            tree = h5_to_dictionary(fh[key], tree=tree, level=level + key)
+    return tree
 
 
 def colorbar(mappable, orientation='vertical', position='right'):
@@ -99,47 +137,25 @@ def rebin_spec_map(spec_map, wls, **kwargs):
 
 class SpectralImage(Sequence):
     file_types = []
-    _item_list = ['spec_im', 'spec_x_array', 'x_array', 'y_array', 'units',
-                  'spec_units']
 
-    def __init__(self, fname='', spec_im=None, spec_x_array=None, x_array=None,
-                 y_array=None, units='px', spec_units='index', **kwargs):
-        if np.all([i is None for i in [spec_im, spec_x_array]]):
-            if self.is_supported(fname):
-                self.load_h5_data(fname)
-            else:
-                raise Exception('%s is not a valid file' % fname)
-                return
-        elif spec_im is None:
-            raise Exception('No spectral image or filename supplied.')
-            return
+    def __init__(self, fname='', dat=None):
+        if dat is not None:
+            assert isinstance(dat, DictionaryTreeBrowser)
+            self.dat = dat.copy()
+        elif self.is_supported(fname):
+            self.load_h5_data(fname)
         else:
-            self.spec_im = spec_im
-            self.spec_units = spec_units
-            self.units = units
+            raise Exception('No valid dictionary or filename supplied.')
+            return
 
-            if spec_x_array is None:
-                self.spec_x_array = np.arange(0, np.size(spec_im[0, 0, :]))
-            else:
-                self.spec_x_array = spec_x_array
-
-            if x_array is None:
-                self.x_array = np.arange(0, np.size(spec_im[:, 0, 0]))
-            else:
-                self.x_array = x_array
-
-            if y_array is None and x_array is not None:
-                self.y_array = x_array
-            elif y_array is None:
-                self.y_array = np.arange(0, np.size(spec_im[0, :, 0]))
-            else:
-                self.y_array = y_array
-
-            for kwarg in kwargs.keys():
-                setattr(self, kwarg, kwargs[kwarg])
-                self._item_list.append(kwarg)
-
+        self.load_from_metadata()
         Sequence.__init__(self)
+
+        if self.is_supported(fname):
+            print('Load from %s complete.' % fname)
+            print('%d x %d spatial x %d spectral points' % (
+                len(self.x_array), len(self.y_array),
+                len(self.spec_x_array)))
 
     def __len__(self):
         return len(self.spec_x_array)
@@ -174,13 +190,26 @@ class SpectralImage(Sequence):
 
     def __getitem__(self, i):
         spec_im, spec_x_array = self._getitem_helper(i)
-        item_item_list = self._item_list.copy()
-        item_item_list.remove('spec_im')
-        item_item_list.remove('spec_x_array')
-        return type(self)(spec_im=spec_im, spec_x_array=spec_x_array,
-                          **{arg: getattr(self, arg) for arg in item_item_list})
+
+        copy = self.copy()
+        copy.spec_x_array = spec_x_array
+        copy.spec_im = spec_im
+
+        return copy
+
+    def copy(self):
+        return type(self)(dat=self.dat)
 
     def load_h5_data(self, fname):
+        try:
+            f = h5.File(fname)
+            self.dat = h5_to_dictionary(f)
+        except Exception as ex:
+            print('Could not load file', fname, ex)
+        finally:
+            f.close()
+
+    def load_from_metadata(self):
         pass
 
     def plot(self, percentile=5, cmap='viridis'):
@@ -190,7 +219,7 @@ class SpectralImage(Sequence):
     def _plot(self, map, title='', percentile=5, cmap='viridis', cbar=True,
               cbar_orientation='horizontal', cbar_position='bottom',):
         ax = plt.gca()
-        X, Y = np.meshgrid(self.y_array, self.x_array)
+        X, Y = np.meshgrid(np.flip(self.y_array), self.x_array)
         img = plt.imshow(map, cmap=cmap,
                          vmin=np.percentile(map, percentile),
                          vmax=np.percentile(map, 100-percentile))
@@ -213,13 +242,11 @@ class SpectralImage(Sequence):
         if self.spec_units == 'nm':
             (En, En_spec_im, ne) = rebin_spec_map(self.spec_im,
                                                   self.spec_x_array)
-            En_item_list = self._item_list.copy()
-            En_item_list.remove('spec_im')
-            En_item_list.remove('spec_x_array')
-            En_item_list.remove('spec_units')
-            return type(self)(spec_im=En_spec_im, spec_x_array=En,
-                              spec_units='eV',
-                              **{arg: getattr(self, arg) for arg in En_item_list})
+            copy = self.copy()
+            copy.spec_im = En_spec_im
+            copy.spec_x_array = En
+            copy.spec_units = 'eV'
+            return copy
         elif self.spec_units == 'eV':
             return self
         else:
@@ -227,9 +254,10 @@ class SpectralImage(Sequence):
             return None
 
     def to_index(self):
-        ind_item_list = self._item_list.copy()
-        ind_item_list.remove('spec_x_array')
-        return type(self)(**{arg: getattr(self, arg) for arg in ind_item_list})
+        copy = self.copy()
+        copy.spec_x_array = np.linspace(len(self.spec_x_array))
+        copy.spec_units = 'index'
+        return copy
 
     def to_signal(self):
         s = Signal1D(self.spec_im)
@@ -261,45 +289,70 @@ class SpectralImage(Sequence):
 
 
 class CLImage:
-    adc_names=['ai0', 'SE2', 'InLens', 'ai3']
-    ctr_names=['ctr0', 'ctr1', 'ctr2', 'ctr3']
-    file_types=['sync_raster_scan.h5', 'hyperspec_cl.h5']
+    file_types = ['sync_raster_scan.h5', 'hyperspec_cl.h5']
 
-    def __init__(self, fname = '', **kwargs):
+    def __init__(self, fname='', **kwargs):
         self.load_h5_data(fname)
+        self.load_from_metadata()
 
     def load_h5_data(self, fname):
-        abspath=os.path.abspath(fname)
-        self.dat=load_RS(os.path.dirname(abspath),
-                           os.path.basename(abspath),)
-        span=self.dat['summary']['size_in_nm']
-        self.x_array=np.linspace(0.0, span[0]*1e-9,
-                                   num = np.size(self.spec_im[:, 0, 0]))
-        self.y_array=np.linspace(0.0, span[1]*1e-9,
-                                   num = np.size(self.spec_im[0, :, 0]))
-        self.units='m'
-        self.spec_units='nm'
+        abspath = os.path.abspath(fname)
+        try:
+            f = h5.File(abspath)
+            self.dat = h5_to_dictionary(f)
+        except Exception as ex:
+            print('Error loading from', fname, ex)
+        finally:
+            f.close()
 
-    def _plot(self, map, percentile = 5, cmap = 'viridis', **kwargs):
-        ax=plt.gca()
-        X, Y=np.meshgrid(self.y_array, self.x_array)
-        img=plt.imshow(map, cmap = cmap,
-                         vmin=np.percentile(map, percentile),
-                         vmax=np.percentile(map, 100-percentile))
+    def load_from_metadata(self):
+        dat = self.dat
+        for meas in self.file_types:
+            meas = meas[:-3]
+            if meas in list(dat['measurement'].keys()):
+                M = dat['measurement'][meas]
+                self.description = M['settings']['description']
+                hspan = M['settings']['h_span']
+                vspan = M['settings']['v_span']
+                self.adc_map = np.squeeze(M['adc_map']).copy()
+                self.ctr_map = np.squeeze(M['ctr_map']).copy()
+                ny, nx, nm = self.adc_map.shape
+                H = dat['hardware']
+                mag = H['sem_remcon']['settings']['magnification']
+                srd = H['sync_raster_daq']['settings']
+                whitelist = r'[^a-zA-Z0-9 ]+'
+                self.adc_names = re.sub(whitelist, '',
+                                        srd['adc_chan_names']).split()
+                self.ctr_names = re.sub(whitelist, '',
+                                        srd['ctr_chan_names']).split()
+                frame_size = 114e-3/mag
+                hspan = hspan/20.0*frame_size
+                vspan = vspan/20.0*frame_size
+                self.x_array = np.linspace(0.0, hspan, num=nx)
+                self.y_array = np.linspace(0.0, vspan, num=ny)
+                self.units = 'm'
+                self.spec_units = 'nm'
+
+    def _plot(self, map, percentile=5, cmap='viridis', **kwargs):
+        ax = plt.gca()
+        X, Y = np.meshgrid(self.y_array, self.x_array)
+        plt.imshow(map, cmap=cmap,
+                   vmin=np.percentile(map, percentile),
+                   vmax=np.percentile(map, 100-percentile))
         plt.axis('equal')
         plt.axis('off')
 
         scalebar = ScaleBar(self.x_array[1]-self.x_array[0])
         plt.gca().add_artist(scalebar)
-        return gca
+        return ax
 
     def get_adc(self, name):
         assert name in self.adc_names
-        return self.dat['se'][:, :, self.adc_names.index(name)]
+        return self.adc_map[:, :, self.adc_names.index(name)]
 
     def get_ctr(self, name):
         assert name in self.ctr_names
-        return self.dat['cntr'][:, :, self.ctr_names.index(name)]
+        return self.ctr_map[:, :, self.ctr_names.index(name)]
 
     def plot_adc(self, name, percentile=5, cmap='viridis', **kwargs):
         adc_map = self.get_adc(name)
@@ -319,36 +372,43 @@ class CLImage:
 class CLSpectralImage(SpectralImage, CLImage):
     file_types = ["hyperspec_cl.h5", ]
 
-    def __init__(self, fname='', spec_im=None, spec_x_array=None, x_array=None,
-                 y_array=None, units='px', spec_units='index', dat=None):
-        SpectralImage.__init__(self, fname=fname, spec_im=spec_im,
-                               spec_x_array=spec_x_array, x_array=x_array,
-                               y_array=y_array, units=units,
-                               spec_units=spec_units, dat=dat)
+    def __init__(self, fname='', dat=None):
+        SpectralImage.__init__(self, fname=fname, dat=dat)
 
-    def load_h5_data(self, fname):
-        abspath = os.path.abspath(fname)
-        self.dat = load_SI(os.path.dirname(abspath),
-                           os.path.basename(abspath),)
-        self._item_list.append('dat')
-        self.spec_x_array = np.array(self.dat['wavelength'])
-        self.spec_im = self.dat['SI']
-        span = self.dat['summary']['size_in_nm']
-        self.x_array = np.linspace(0.0, span[0]*1e-9,
-                                   num=np.size(self.spec_im[:, 0, 0]))
-        self.y_array = np.linspace(0.0, span[1]*1e-9,
-                                   num=np.size(self.spec_im[0, :, 0]))
-        self.units = 'm'
-        self.spec_units = 'nm'
+    def load_from_metadata(self):
+        CLImage.load_from_metadata(self)
+        M = self.dat['measurement'][self.file_types[0][:-3]]
+        self.spec_im = np.squeeze(M['spec_map']).copy()
+        self.spec_x_array = np.array(M['wls'])
 
 
 class PLSpectralImage(SpectralImage):
-    file_types = ['asi_OO_hyperspec_scan.h5', ]
+    file_types = ['asi_OO_hyperspec_scan.h5', 'andor_asi_hyperspec_scan.h5']
 
-    def load_h5_data(self, fname):
-        (sample, self.spec_x_array, self.spec_im, h_array, v_array, nh, nv, nf,
-         dh, dv) = load_uvpl_map(fname)
-        self.x_array = h_array * 1e-3
-        self.y_array = v_array * 1e-3
-        self.spec_units = 'nm'
-        self.units = 'm'
+    def load_from_metadata(self):
+        try:
+            dat = self.dat
+            for meas in self.file_types:
+                meas = meas[:-3]
+                if meas in list(dat['measurement'].keys()):
+                    self.name = str(dat['app']['settings']['sample'])
+                    # print(self.name)
+                    M = dat['measurement'][meas]
+                    self.spec_x_array = np.array(M['wls'])
+                    self.spec_im = np.squeeze(M['spec_map']).copy()
+                    self.x_array = np.array(M['h_array'])*1e-3
+                    self.y_array = np.array(M['v_array'])*1e-3
+                    self.spec_units = 'nm'
+                    self.units = 'mm'
+
+                    # print('Sample: ' + self.name)
+                    map_min = np.amin(self.spec_im)
+                    if map_min < 0:
+                        # print('Correcting negative minimum value in spec map:',
+                        #       map_min)
+                        self.spec_im += 1e-2 - map_min
+                    # print('%d x %d spatial x %d spectral points' % (
+                    #     len(self.x_array), len(self.y_array),
+                    #     len(self.spec_x_array)))
+        except Exception as ex:
+            print('Error loading from dictionary', ex)
