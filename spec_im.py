@@ -219,10 +219,13 @@ class SpectralImage(Sequence):
     def _plot(self, map, title='', percentile=5, cmap='viridis', cbar=True,
               cbar_orientation='horizontal', cbar_position='bottom',):
         ax = plt.gca()
-        X, Y = np.meshgrid(np.flip(self.y_array), self.x_array)
-        img = plt.imshow(map, cmap=cmap,
-                         vmin=np.percentile(map, percentile),
-                         vmax=np.percentile(map, 100-percentile))
+        X, Y = np.meshgrid(self.x_array, self.y_array)
+        img = plt.pcolormesh(X, Y, map, cmap=cmap,
+                             vmin=np.percentile(map, percentile),
+                             vmax=np.percentile(map, 100-percentile))
+        # img = plt.imshow(map, cmap=cmap,
+        #                  vmin=np.percentile(map, percentile),
+        #                  vmax=np.percentile(map, 100-percentile))
         plt.axis('equal')
         plt.axis('off')
         plt.title(title)
@@ -283,7 +286,7 @@ class SpectralImage(Sequence):
 
     def get_spec(self, loc=(0, 0), sum=False):
         if sum:
-            return self.spec_im.sum(axis=(0, 1)) / (np.size(self.x_array) * np.size(self.y_array))
+            return self.spec_im.sum(axis=(0, 1))
         else:
             return self.spec_im[loc[0], loc[1], :]
 
@@ -396,8 +399,8 @@ class PLSpectralImage(SpectralImage):
                     M = dat['measurement'][meas]
                     self.spec_x_array = np.array(M['wls'])
                     self.spec_im = np.squeeze(M['spec_map']).copy()
-                    self.x_array = np.array(M['h_array'])*1e-3
-                    self.y_array = np.array(M['v_array'])*1e-3
+                    self.x_array = np.array(M['h_array'])
+                    self.y_array = np.array(M['v_array'])
                     self.spec_units = 'nm'
                     self.units = 'mm'
 
