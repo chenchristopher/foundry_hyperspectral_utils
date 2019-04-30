@@ -1,4 +1,5 @@
 from collections.abc import Sequence
+from collections import OrderedDict
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,6 +11,8 @@ import scipy as sp
 from hyperspy.misc.utils import DictionaryTreeBrowser
 import re
 from copy import copy
+import math
+from sklearn.decomposition import PCA
 
 
 def h5_to_dictionary(fh, tree=None, level='', debug=False):
@@ -81,13 +84,18 @@ def rebin_spec_map(spec_map, wls, **kwargs):
 
     """
     """
-    Rebins a spectral map from nm to eV. Resamples the map to provide evenly spaced energy values.
+    Rebins a spectral map from nm to eV. Resamples the map to provide evenly
+    spaced energy values.
 
-    Also supports trimming wavelength range by array indicies (ind_min,ind_max) or spectral values (spec_min,spec_max).
+    Also supports trimming wavelength range by array indicies (ind_min,ind_max)
+    or spectral values (spec_min,spec_max).
 
     Spectral locations supercede array indicies.
     """
-    [nv, nh, nf] = np.shape(spec_map)
+    if len(spec_map.shape) == 3:
+        [nv, nh, nf] = np.shape(spec_map)
+    elif len(spec_map.shape) == 4:
+        [nz, nv, nh, hf] = np.shape(spec_map)
 
     if 'spec_min' in kwargs:
         ind_min = np.searchsorted(wls, kwargs['spec_min'])
@@ -118,10 +126,16 @@ def rebin_spec_map(spec_map, wls, **kwargs):
     icorr = wls[ind_min:ind_max]**2
 
     En = np.linspace(En_wls[-1], En_wls[0], ne)
-    En_spec_map = np.zeros((nv, nh, ne))
 
-    spec_map_interp = sp.interpolate.interp1d(
-        En_wls, spec_map[:, :, ind_min:ind_max]*icorr, axis=-1)
+    if len(spec_map.shape) == 3:
+        En_spec_map = np.zeros((nv, nh, ne))
+        spec_map_interp = sp.interpolate.interp1d(
+            En_wls, spec_map[:, :, ind_min:ind_max]*icorr, axis=-1)
+    elif len(spec_map.shape) == 4:
+        En_spec_map = np.zeros((nz, nv, nh, ne))
+        spec_map_interp = sp.interpolate.interp1d(
+            En_wls, spec_map[:, :, :, ind_min:ind_max]*icorr, axis=-1)
+
     En_spec_map = spec_map_interp(En)
 
     print(str(nv) + ' x ' + str(nh) + ' spatial x '
@@ -153,9 +167,14 @@ class SpectralImage(Sequence):
 
         if self.is_supported(fname):
             print('Load from %s complete.' % fname)
-            print('%d x %d spatial x %d spectral points' % (
-                len(self.x_array), len(self.y_array),
-                len(self.spec_x_array)))
+            if hasattr(self, 'z_array'):
+                print('%d x %d x %d spatial x %d spectral points' % (
+                    len(self.z_array), len(self.x_array), len(self.y_array),
+                    len(self.spec_x_array)))
+            else:
+                print('%d x %d spatial x %d spectral points' % (
+                    len(self.x_array), len(self.y_array),
+                    len(self.spec_x_array)))
 
     def __len__(self):
         return len(self.spec_x_array)
@@ -174,7 +193,10 @@ class SpectralImage(Sequence):
             elif ind_max >= len(self.spec_x_array):
                 ind_max = len(self.spec_x_array) - 1
 
-            spec_im = self.spec_im[:, :, ind_min:ind_max]
+            if len(self.spec_im.shape) == 3:
+                spec_im = self.spec_im[:, :, ind_min:ind_max]
+            elif len(self.spec_im.shape) == 4:
+                spec_im = self.spec_im[:, :, :, ind_min:ind_max]
             spec_x_array = self.spec_x_array[ind_min:ind_max]
         else:
             ind = np.searchsorted(self.spec_x_array, i)
@@ -183,22 +205,31 @@ class SpectralImage(Sequence):
             elif ind >= len(self.spec_x_array):
                 ind = len(self.spec_x_array) - 1
 
-            spec_im = self.spec_im[:, :, ind]
+            if len(self.spec_im.shape) == 3:
+                spec_im = self.spec_im[:, :, ind]
+            elif len(self.spec_im.shape) == 4:
+                spec_im = self.spec_im[:, :, :, ind]
             spec_x_array = self.spec_x_array[ind]
 
-        return spec_im, spec_x_array
+        return np.array(spec_im), np.array(spec_x_array)
 
     def __getitem__(self, i):
         spec_im, spec_x_array = self._getitem_helper(i)
 
-        copy = self.copy()
-        copy.spec_x_array = spec_x_array
-        copy.spec_im = spec_im
-
-        return copy
+        clone = self.copy()
+        clone.spec_x_array = spec_x_array
+        clone.spec_im = spec_im
+        return clone
 
     def copy(self):
-        return type(self)(dat=self.dat)
+        clone = type(self)(dat=self.dat)
+        clone.spec_im = np.array(self.spec_im)
+        clone.spec_x_array = np.array(self.spec_x_array)
+        clone.x_array = np.array(self.x_array)
+        clone.y_array = np.array(self.y_array)
+        clone.spec_units = 'nm'
+        clone.units = 'mm'
+        return clone
 
     def load_h5_data(self, fname):
         try:
@@ -245,11 +276,11 @@ class SpectralImage(Sequence):
         if self.spec_units == 'nm':
             (En, En_spec_im, ne) = rebin_spec_map(self.spec_im,
                                                   self.spec_x_array)
-            copy = self.copy()
-            copy.spec_im = En_spec_im
-            copy.spec_x_array = En
-            copy.spec_units = 'eV'
-            return copy
+            clone = self.copy()
+            clone.spec_im = En_spec_im
+            clone.spec_x_array = En
+            clone.spec_units = 'eV'
+            return clone
         elif self.spec_units == 'eV':
             return self
         else:
@@ -257,10 +288,10 @@ class SpectralImage(Sequence):
             return None
 
     def to_index(self):
-        copy = self.copy()
-        copy.spec_x_array = np.linspace(len(self.spec_x_array))
-        copy.spec_units = 'index'
-        return copy
+        clone = self.copy()
+        clone.spec_x_array = np.linspace(len(self.spec_x_array))
+        clone.spec_units = 'index'
+        return clone
 
     def to_signal(self):
         s = Signal1D(self.spec_im)
@@ -284,11 +315,16 @@ class SpectralImage(Sequence):
         plt.plot(self.spec_x_array, self.get_spec(sum=True))
         plt.xlabel(self.spec_units)
 
-    def get_spec(self, loc=(0, 0), sum=False):
+    def get_spec(self, loc=None, sum=False):
         if sum:
-            return self.spec_im.sum(axis=(0, 1))
+            return self.spec_im.sum(
+                axis=tuple(range(len(self.spec_im.shape)))[:-1])
         else:
-            return self.spec_im[loc[0], loc[1], :]
+            assert isinstance(loc, tuple)
+            if len(self.spec_im.shape) == 3:
+                return self.spec_im[loc[0], loc[1], :]
+            elif len(self.spec_im.shape) == 4:
+                return self.spec_im[loc[0], loc[1], loc[2], :]
 
 
 class CLImage:
@@ -386,7 +422,8 @@ class CLSpectralImage(SpectralImage, CLImage):
 
 
 class PLSpectralImage(SpectralImage):
-    file_types = ['asi_OO_hyperspec_scan.h5', 'andor_asi_hyperspec_scan.h5']
+    file_types = ['oo_asi_hyperspec_scan.h5', 'asi_OO_hyperspec_scan.h5',
+                  'andor_asi_hyperspec_scan.h5']
 
     def load_from_metadata(self):
         try:
@@ -415,3 +452,65 @@ class PLSpectralImage(SpectralImage):
                     #     len(self.spec_x_array)))
         except Exception as ex:
             print('Error loading from dictionary', ex)
+
+
+class PL3DSpectralImage(PLSpectralImage):
+    # TODO - override to_signal
+
+    file_types = ['oo_asi_hyperspec_3d_scan.h5']
+
+    def load_from_metadata(self):
+        PLSpectralImage.load_from_metadata(self)
+        self.load_slices()
+        # self.spec_im = self.spec_im[0, :, :, :]
+
+    def load_slices(self):
+        if hasattr(self, 'dict'):
+            del self.dict
+        try:
+            dat = self.dat
+            for meas in self.file_types:
+                if meas[:-3] in list(dat['measurement'].keys()):
+                    self.z_array = np.array(
+                                   dat['measurement'][meas[:-3]]['z_array'])
+        except Exception as ex:
+            print('Error loading z_array values', ex)
+
+        z_stack_map = np.array(self.spec_im)
+        self.dict = OrderedDict()
+        for kk in range(len(self.z_array)):
+            key = '%0.4f' % self.z_array[kk]
+            img = SpectralImage(dat=self.dat)
+            img.spec_im = np.squeeze(z_stack_map[kk, :, :, :])
+            img.spec_x_array = np.array(self.spec_x_array)
+            img.x_array = np.array(self.x_array)
+            img.y_array = np.array(self.y_array)
+            img.spec_units = 'nm'
+            img.units = 'mm'
+            self.dict[key] = img
+
+    def plot(self, percentile=5, cmap='viridis'):
+        num_slices = np.size(self.z_array)
+        slice_list = self.get_slice_list()
+        num_rows = math.ceil(float(num_slices)/5)
+        for kk in range(num_slices):
+            plt.subplot(num_rows, 5, kk+1)
+            self.get_slice(slice_list[kk]).plot(percentile=percentile,
+                                                cmap=cmap)
+            plt.title('z = %s mm' % slice_list[kk])
+        return plt.gcf()
+
+    def __getitem__(self, i):
+        clone = PLSpectralImage.__getitem__(self, i)
+        clone.load_slices()
+        return clone
+
+    def get_slice(self, key):
+        assert key in list(self.dict.keys())
+        return self.dict[key]
+
+    def get_slice_list(self):
+        return list(self.dict.keys())
+
+    def to_signal(self):
+        pass
