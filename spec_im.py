@@ -221,8 +221,8 @@ class SpectralImage(Sequence):
         ax = plt.gca()
         X, Y = np.meshgrid(self.x_array, self.y_array)
         img = plt.pcolormesh(X, Y, map, cmap=cmap,
-                             vmin=np.percentile(map, percentile),
-                             vmax=np.percentile(map, 100-percentile))
+                             vmin=np.nanpercentile(map, percentile),
+                             vmax=np.nanpercentile(map, 100-percentile))
         # img = plt.imshow(map, cmap=cmap,
         #                  vmin=np.percentile(map, percentile),
         #                  vmax=np.percentile(map, 100-percentile))
