@@ -95,7 +95,7 @@ def rebin_spec_map(spec_map, wls, **kwargs):
     if len(spec_map.shape) == 3:
         [nv, nh, nf] = np.shape(spec_map)
     elif len(spec_map.shape) == 4:
-        [nz, nv, nh, hf] = np.shape(spec_map)
+        [nz, nv, nh, nf] = np.shape(spec_map)
 
     if 'spec_min' in kwargs:
         ind_min = np.searchsorted(wls, kwargs['spec_min'])
