@@ -243,12 +243,14 @@ class SpectralImage(Sequence):
     def load_from_metadata(self):
         pass
 
-    def plot(self, percentile=5, cmap='viridis'):
+    def plot(self, percentile=5, cmap='viridis', **kwargs):
         spec_map = self.spec_im.sum(axis=-1)
-        return self._plot(spec_map, percentile=5, cmap='viridis')
+        return self._plot(spec_map, percentile=5, cmap='viridis',
+                          **kwargs)
 
     def _plot(self, map, title='', percentile=5, cmap='viridis', cbar=True,
-              cbar_orientation='horizontal', cbar_position='bottom',):
+              cbar_orientation='horizontal', cbar_position='bottom',
+              show_scalebar=True):
         ax = plt.gca()
         X, Y = np.meshgrid(self.x_array, self.y_array)
         img = plt.pcolormesh(X, Y, map, cmap=cmap,
@@ -260,8 +262,9 @@ class SpectralImage(Sequence):
         plt.axis('equal')
         plt.axis('off')
         plt.title(title)
-        scalebar = ScaleBar(self.x_array[1]-self.x_array[0])
-        plt.gca().add_artist(scalebar)
+        if show_scalebar:
+            scalebar = ScaleBar(self.x_array[1]-self.x_array[0], units='m')
+            plt.gca().add_artist(scalebar)
         if cbar:
             colorbar(img, orientation=cbar_orientation, position=cbar_position)
         return ax
