@@ -315,7 +315,10 @@ class SpectralImage(Sequence):
         return s
 
     def plot_spec(self):
-        plt.plot(self.spec_x_array, self.get_spec(sum=True))
+        self._plot_spec(self.get_spec(sum=True))
+
+    def _plot_spec(self, spec):
+        plt.plot(self.spec_x_array, spec)
         plt.xlabel(self.spec_units)
 
     def get_spec(self, loc=None, sum=False):
