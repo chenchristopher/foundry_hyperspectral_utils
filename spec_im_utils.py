@@ -115,7 +115,7 @@ def plot_cl_summary(spec_im):
     return f0
 
 
-def plot_pl_summary(specim):
+def plot_pl_summary(specim, **kwargs):
     assert isinstance(specim, si.PLSpectralImage)
     f = plt.figure()
     plt.subplot(2, 3, 1)
@@ -127,9 +127,21 @@ def plot_pl_summary(specim):
     esi = specim.to_energy()
     plt.subplot(2, 3, 4)
     esi.plot()
+    plt.tight_layout(h_pad=1)
+    return f
 
     plt.subplot(2, 3, (5, 6))
     esi.plot_spec()
+
+
+def plot_pl_3d_summary(specim, num_rows=2, **kwargs):
+    assert isinstance(specim, si.PLSpectralImage)
+    f = plt.figure()
+    specim.plot(num_rows=num_rows, cbar_orientation='vertical',
+                cbar_position='right')
+
+    plt.subplot(num_rows, 1, num_rows)
+    specim.plot_spec()
 
     plt.suptitle(specim.name)
     plt.tight_layout(h_pad=1)
