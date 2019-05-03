@@ -1,5 +1,4 @@
 from collections.abc import Sequence
-from collections import OrderedDict
 import os
 import numpy as np
 import matplotlib.pyplot as plt
@@ -15,38 +14,46 @@ import math
 from sklearn.decomposition import PCA, FastICA, NMF
 
 
-def h5_to_dictionary(fh, tree=None, level='', debug=False):
+def h5_to_dictionary(fh, tree=None, level=''):
+    """
+    Transforms hdf5 file tree into a DictionaryTreeBrowser
+
+    Recursively generates a hyperspy.misc.utils.DictionaryTreeBrowser with the
+    structure of the given h5py.File object.
+
+    Parameters
+    ----------
+        fh : h5py.File
+            h5py File handle
+        tree : DictionaryTreeBrowser, optional
+            A DictionaryTreeBrowser to append to recursively
+        level : str, optional
+            Location in hierarchy of the hdf5/DictionaryTreeBrowser
+
+    Returns
+    ----------
+        DictionaryTreeBrowser
+            dictionary object with hierarchy of given HDF5 file handle
+    """
+    assert tree is None or isinstance(tree, DictionaryTreeBrowser)
+
     if tree is None:
-        if debug:
-            print('Creating DictionaryTreeBrowser')
         tree = DictionaryTreeBrowser()
-    elif level == '' and debug:
-        print('At root level')
     else:
-        if debug:
-            print('function called at level', level)
         level += '.'
 
     for key in list(fh.attrs.keys()):
         val = fh.attrs[key]
         tree.set_item(level + key, copy(val))
-        if debug:
-            print('level %s, %s: %s' % (level, key, val))
 
     for (key, desc) in list(fh.items()):
-        if debug:
-            print(key, desc)
         key = str(key)
         desc = str(desc)
         if '(0 members)' in desc:
-            if debug:
-                print('No members of level %s, %s' % (level, key))
             continue
         elif 'HDF5 dataset' in desc:
             tree.set_item(level + key, np.squeeze(fh[key]).copy())
         elif 'HDF5 group' in desc:
-            if debug:
-                print('Recursive call at level %s, %s' % (level, key))
             tree = h5_to_dictionary(fh[key], tree=tree, level=level + key)
     return tree
 
@@ -66,31 +73,37 @@ def colorbar(mappable, orientation='vertical', position='right'):
 
 
 def rebin_spec_map(spec_map, wls, **kwargs):
-    """Short summary.
+    """
+    Convert spectral image from wavelength in nm to energy in eV
+
+    Given a spectral image with a spectral dimension in nm, apply the
+    appropriate intensity correction and rebin the spectra into equally spaced
+    energy bins with scipy.interpolate.interp1d. Also supports trimming
+    wavelength range by array indicies or spectral values.
 
     Parameters
     ----------
-    spec_map : type
-        Description of parameter `spec_map`.
-    wls : type
-        Description of parameter `wls`.
-    **kwargs : type
-        Description of parameter `**kwargs`.
+        spec_map : numpy.ndarray
+            Spectral map to be converted and rebinned
+        wls : numpy.array
+            Wavelength values
+        spec_max : float, optional
+            Maximum spectral value desired
+        spec_min : float, optional
+            Minimum spectral value desired
+        ind_max : int, optional
+            Maximum spectral index desired
+        ind_min : int, optional
+            Minimum spectral index desired
 
     Returns
-    -------
-    type
-        Description of returned object.
-
-    """
-    """
-    Rebins a spectral map from nm to eV. Resamples the map to provide evenly
-    spaced energy values.
-
-    Also supports trimming wavelength range by array indicies (ind_min,ind_max)
-    or spectral values (spec_min,spec_max).
-
-    Spectral locations supercede array indicies.
+    ----------
+        En : numpy.array
+            Spectral energy array in eV
+        En_spec_map : numpy.ndarray
+            Rebinned spectral map
+        ne : int
+            Number of spectral energy points
     """
     if len(spec_map.shape) == 3:
         [nv, nh, nf] = np.shape(spec_map)
@@ -149,10 +162,242 @@ def rebin_spec_map(spec_map, wls, **kwargs):
     return (En, En_spec_map, ne)
 
 
-class SpectralImage(Sequence):
+class Image:
+    """
+    Base class for an image or group of images.
+
+    Container for loading and visualizing images. Supports visualization of
+    images
+
+    Attributes
+    ----------
+        file_types : list
+            List of supported file file_types
+        dat : DictionaryTreeBrowser
+            metadata dictionary extracted from hdf tree
+        x_array : numpy.array
+            Array of spatial x values
+        y_array : numpy.array
+            Array of spatial y values
+        units : str
+            Spatial units
+
+    Methods
+    ----------
+        load_h5_data(fname)
+            Load the data from a given hdf5 file name
+        load_from_metadata()
+            Placeholder for subclasses to implement. Needs to assign values to
+            all attributes except file_types and dat
+        is_supported(fname)
+            Checks to see if the string fname is in the list of supported file
+            types
+    """
+    file_types = []
+
+    def __init__(self, fname='', **kwargs):
+        self.load_h5_data(fname)
+        self.load_from_metadata()
+
+    def load_h5_data(self, fname):
+        abspath = os.path.abspath(fname)
+        try:
+            f = h5.File(abspath)
+            self.dat = h5_to_dictionary(f)
+        except Exception as ex:
+            print('Error loading from', fname, ex)
+        finally:
+            f.close()
+
+    def load_from_metadata(self):
+        pass
+
+    def is_supported(self, fname):
+        for ftype in self.file_types:
+            if ftype in fname:
+                return True
+        return False
+
+    def _plot(self, map, **kwargs):
+        """
+        Plots 2D map with spatial dimensions of the image
+
+        Helper function which plots any map of the correct dimensions with the
+        spatial dimensions of the image
+
+        Arguments
+        ----------
+            map : numpy.ndarray)
+                spatial map to be plotted with dimensions equal to the spatial
+                dimensions of the spectral image
+            title : str, optional
+                title to be added to the plot
+            percentile : int, optional
+                percentile of data to include in colormap range
+            vmin : float, optional
+                minimum value of colormap range
+            vmax : float, optional
+                maximum value of colormap range
+            cmap : str, optional
+                colormap
+            show_axes : bool, optional
+                Show axes labels
+            show_cbar : bool, optional
+                Show colorbar
+            cbar_orientation : {'horizontal', 'vertical'}, optional
+                Colorbar orientation
+            cbar_position : {'left', 'right', 'top', 'bottom'}, optional
+                Colorbar position outside of axes
+            show_scalebar : bool
+                Show matplotlib_scalebar.ScaleBar
+            scalebar_location : str or int
+                position of scalebar
+
+        Returns
+        ----------
+            matplotlib.axes
+
+        """
+        kwlist = list(kwargs.keys())
+
+        pcolormesh_kwargs = {}
+        if 'cmap' in kwlist:
+            pcolormesh_kwargs['cmap'] = kwargs['cmap']
+        else:
+            pcolormesh_kwargs['cmap'] = 'viridis'
+
+        if 'vmin' in kwlist:
+            pcolormesh_kwargs['vmin'] = kwargs['vmin']
+        elif 'percentile' in kwlist:
+            pcolormesh_kwargs['vmin'] = np.nanpercentile(
+                map, kwargs['percentile'])
+        else:
+            pcolormesh_kwargs['vmin'] = np.nanpercentile(map, 5)
+
+        if 'vmax' in kwlist:
+            pcolormesh_kwargs['vmax'] = kwargs['vmax']
+        elif 'percentile' in kwlist:
+            pcolormesh_kwargs['vmax'] = np.nanpercentile(
+                map, 100-kwargs['percentile'])
+        else:
+            pcolormesh_kwargs['vmax'] = np.nanpercentile(map, 95)
+
+        ax = plt.gca()
+        X, Y = np.meshgrid(self.x_array, self.y_array)
+        img = plt.pcolormesh(X, Y, map, **pcolormesh_kwargs)
+        plt.axis('equal')
+
+        if 'show_axes' in kwlist:
+            if not kwargs['show_axes']:
+                plt.axis('off')
+
+        if 'title' in kwlist:
+            plt.title(kwargs['title'])
+
+        if 'show_scalebar' in kwlist:
+            assert isinstance(kwargs['show_scalebar'], bool)
+            if kwargs['show_scalebar']:
+                scalebar_kwargs = {}
+                if 'scalebar_position' in kwlist:
+                    scalebar_kwargs['location'] = kwargs[
+                        'scalebar_position']
+                scalebar = ScaleBar(self.x_array[1]-self.x_array[0], units='m',
+                                    **scalebar_kwargs)
+                plt.gca().add_artist(scalebar)
+
+        if 'show_cbar' in kwlist:
+            assert isinstance(kwargs['show_cbar'], bool)
+            if kwargs['show_cbar']:
+                cbar_kwargs = {}
+                if 'cbar_orientation' in kwlist:
+                    cbar_kwargs['orientation'] = kwargs['cbar_orientation']
+                if 'cbar_position' in kwlist:
+                    cbar_kwargs['position'] = kwargs['cbar_position']
+                colorbar(img, **cbar_kwargs)
+        return ax
+
+# TODO - update subclasses to only support 4D spec_im
+
+
+class SpectralImage(Sequence, Image):
+    """
+    Base class for a spectral image.
+
+    Container for loading and visualizing spectral images. Directly indexable
+    by spectral x values. Capable of holding 2D and 3D spectral images, but
+    only supports visualization of 2D spectral images.
+
+    Attributes
+    ----------
+        file_types : list
+            List of supported file file_types
+        dat : DictionaryTreeBrowser
+            metadata dictionary extracted from hdf tree
+        spec_im : numpy.ndarray
+            Spectral image array with shape
+            (num z values, num y values, num x values, num spectral values)
+        spec_x_array : numpy.array
+            Spectral x array
+        spec_units : str
+            Spectral units
+        x_array : numpy.array
+            Array of spatial x values
+        y_array : numpy.array
+            Array of spatial y values
+        z_array : numpy.array
+            Array of spatial z values
+        units : str
+            Spatial units
+
+    Methods
+    ----------
+        copy(signal=None)
+            Return a copy of the SpectralImage. If signal is a
+            hyperspy.Signal1D, the spectral image is overwritten with the data
+            in signal.
+        load_h5_data(fname)
+            Load the data from a given hdf5 file name
+        load_from_metadata()
+            Placeholder for subclasses to implement. Needs to assign values to
+            all attributes except file_types and dat
+        plot()
+            Plots a map of the spectral image summed along the spectral
+            direction
+        set_background()
+        remove_background()
+            Removes background correction from data
+        to_energy()
+            Converts and rebins from wavelength to energy. Returns a new
+            SpectralImage or subclass with the same metadata.
+        to_index()
+            Converts spectral x array to indices
+        to_signal()
+            Returns a hyperspy.Signal1D with of the spectral image
+        plot_spec()
+            Plots a spectrum summed over all spatial axes
+        get_spec()
+        is_supported(fname)
+            Checks to see if the string fname is in the list of supported file
+            types
+    """
     file_types = []
 
     def __init__(self, fname='', dat=None):
+        """
+        Initialization for SpectralImage can be from a filename or metadata
+        dictionary.
+
+        hdf5 filename is checked against list of supported file types.
+        Dictionary supercedes loading from a file.
+
+        Parameters
+        ----------
+            fname : str
+                filename of hdf5 file to open
+            dat : DictionaryTreeBrowser
+                metadata dictionary
+
+        """
         if dat is not None:
             assert isinstance(dat, DictionaryTreeBrowser)
             self.dat = dat.copy()
@@ -167,14 +412,9 @@ class SpectralImage(Sequence):
 
         if self.is_supported(fname):
             print('Load from %s complete.' % fname)
-            if hasattr(self, 'z_array'):
-                print('%d x %d x %d spatial x %d spectral points' % (
-                    len(self.z_array), len(self.x_array), len(self.y_array),
-                    len(self.spec_x_array)))
-            else:
-                print('%d x %d spatial x %d spectral points' % (
-                    len(self.x_array), len(self.y_array),
-                    len(self.spec_x_array)))
+            print('%d x %d x %d spatial x %d spectral points' % (
+                len(self.z_array), len(self.x_array), len(self.y_array),
+                len(self.spec_x_array)))
 
     def __len__(self):
         return len(self.spec_x_array)
@@ -193,10 +433,7 @@ class SpectralImage(Sequence):
             elif ind_max >= len(self.spec_x_array):
                 ind_max = len(self.spec_x_array) - 1
 
-            if len(self.spec_im.shape) == 3:
-                spec_im = self.spec_im[:, :, ind_min:ind_max]
-            elif len(self.spec_im.shape) == 4:
-                spec_im = self.spec_im[:, :, :, ind_min:ind_max]
+            spec_im = self.spec_im[:, :, :, ind_min:ind_max]
             spec_x_array = self.spec_x_array[ind_min:ind_max]
         else:
             ind = np.searchsorted(self.spec_x_array, i)
@@ -205,10 +442,7 @@ class SpectralImage(Sequence):
             elif ind >= len(self.spec_x_array):
                 ind = len(self.spec_x_array) - 1
 
-            if len(self.spec_im.shape) == 3:
-                spec_im = self.spec_im[:, :, ind]
-            elif len(self.spec_im.shape) == 4:
-                spec_im = self.spec_im[:, :, :, ind]
+            spec_im = self.spec_im[:, :, :, ind]
             spec_x_array = self.spec_x_array[ind]
 
         return np.array(spec_im), np.array(spec_x_array)
@@ -221,12 +455,17 @@ class SpectralImage(Sequence):
         clone.spec_im = spec_im
         return clone
 
-    def copy(self):
+    def copy(self, signal=None):
         clone = type(self)(dat=self.dat)
-        clone.spec_im = np.array(self.spec_im)
+        if signal is not None:
+            assert isinstance(signal, Signal1D)
+            clone.spec_im = signal._data
+        else:
+            clone.spec_im = np.array(self.spec_im)
         clone.spec_x_array = np.array(self.spec_x_array)
         clone.x_array = np.array(self.x_array)
         clone.y_array = np.array(self.y_array)
+        clone.z_array = np.array(self.z_array)
         clone.spec_units = 'nm'
         clone.units = 'mm'
         return clone
@@ -243,39 +482,104 @@ class SpectralImage(Sequence):
     def load_from_metadata(self):
         pass
 
-    def plot(self, percentile=5, cmap='viridis', **kwargs):
-        spec_map = self.spec_im.sum(axis=-1)
-        return self._plot(spec_map, percentile=5, cmap='viridis',
-                          **kwargs)
+    def plot(self, z_index=None, num_rows=1, **kwargs):
+        """
+            Visualize spectral image
 
-    def _plot(self, map, title='', percentile=5, cmap='viridis', cbar=True,
-              cbar_orientation='horizontal', cbar_position='bottom',
-              show_scalebar=True):
-        ax = plt.gca()
-        X, Y = np.meshgrid(self.x_array, self.y_array)
-        img = plt.pcolormesh(X, Y, map, cmap=cmap,
-                             vmin=np.nanpercentile(map, percentile),
-                             vmax=np.nanpercentile(map, 100-percentile))
-        # img = plt.imshow(map, cmap=cmap,
-        #                  vmin=np.percentile(map, percentile),
-        #                  vmax=np.percentile(map, 100-percentile))
-        plt.axis('equal')
-        plt.axis('off')
-        plt.title(title)
-        if show_scalebar:
-            scalebar = ScaleBar(self.x_array[1]-self.x_array[0], units='m')
-            plt.gca().add_artist(scalebar)
-        if cbar:
-            colorbar(img, orientation=cbar_orientation, position=cbar_position)
-        return ax
+            Visualizes 2D and 3D spectral images. Passes arguments to _plot
+
+            Arguments
+            ----------
+                z_index : int, optional
+                    Index of z value to display as a mappable
+                num_rows : int, optional
+                    Number of rows over which to display all 2D spectral
+                    images in 3D spectral image
+                **kwargs
+                    Keyword arguments passed to _plot
+
+            Raises
+            ----------
+                IndexError
+                    Attempted to access z index larger than z array
+        """
+        nz = np.size(self.z_array)
+        if z_index is None:
+            if np.size(self.z_array) == 1:
+                self.plot(z_index=0, **kwargs)
+            else:
+                num_cols = math.ceil(float(nz)/float(num_rows-1))
+                # print(num_rows, num_cols, num_slices)
+                for kk in range(nz):
+                    plt.subplot(num_rows, num_cols, kk + 1)
+                    self.plot(z_index=z_index, **kwargs)
+        else:
+            assert isinstance(z_index, int)
+            if z_index >= nz:
+                err = 'Cannot access z_index %d in z_array size %d' % (
+                    z_index, nz)
+                raise IndexError(err)
+            spec_map = self.spec_im[z_index, :, :, :].sum(axis=-1)
+            self._plot(spec_map, **kwargs)
+
+    def set_background(self, lims=(-1.0, -1.0), zero_negative_values=True,
+                       append=False):
+        """
+            Background substraction of spectral images
+
+            Fits a background over the given spectral range and/or sets the
+            minimum spectra value to 0 if < 0. Can either establish a new
+            background or append it to the existing background.
+
+            Attributes
+            ----------
+            lims : tuple, optional
+                Spectral values over which to fit a background
+            zero_negative_values : bool, optional
+                Set the minimum value of the spectral image to 0 if < 0
+            append : bool, optional
+                Whether or not to append the background parameters to the
+                existing parameters or to start over
+        """
+        if hasattr(self, 'bkg') and not append:
+            self.remove_background()
+
+        if lims != (-1.0, -1.0):
+            bkg_si = self[lims[0]:lims[1]]
+            bkg = np.average(bkg_si.spec_im, axis=-1)
+            self.bkg = np.empty(np.shape(self.spec_im))
+            for kk in range(self.spec_im.shape[-1]):
+                self.bkg[:, :, :, kk] = bkg
+            self.spec_im -= self.bkg
+
+        if zero_negative_values:
+            spec_min = np.amin(self.spec_im)
+            print(spec_min)
+            if spec_min < 0:
+                self.bkg[:, :, :, :] -= spec_min
+                self.spec_im[:, :, :, :] -= spec_min
+
+    def remove_background(self):
+        """
+            Removes background correction from the spectral image
+        """
+        assert hasattr(self, 'bkg')
+        self.spec_im += self.bkg
+        del self.bkg
 
     def is_supported(self, fname):
+        """
+            Checks file name against list of supported file types
+        """
         for ftype in self.file_types:
             if ftype in fname:
                 return True
         return False
 
     def to_energy(self):
+        """
+            Returns SpectralImage rebinned to energy units
+        """
         if self.spec_units == 'nm':
             (En, En_spec_im, ne) = rebin_spec_map(self.spec_im,
                                                   self.spec_x_array)
@@ -291,28 +595,83 @@ class SpectralImage(Sequence):
             return None
 
     def to_index(self):
+        """
+            Returns SpectralImage with index as spectral unit
+        """
         clone = self.copy()
         clone.spec_x_array = np.linspace(len(self.spec_x_array))
         clone.spec_units = 'index'
         return clone
 
     def to_signal(self):
-        s = Signal1D(self.spec_im)
-        s.change_dtype('float64')
-        s.axes_manager[2].scale = self.spec_x_array[1] - self.spec_x_array[0]
-        s.axes_manager[2].offset = self.spec_x_array.min()
-        s.axes_manager[2].units = self.spec_units
-        if self.spec_units == 'nm':
-            s.axes_manager[2].name = '$\lambda$'
-        elif self.spec_units == 'eV':
-            s.axes_manager[2].name = '$E$'
-        s.axes_manager[0].name = 'x'
-        s.axes_manager[0].units = 'm'
-        s.axes_manager[0].scale = self.x_array[1] - self.x_array[0]
-        s.axes_manager[1].name = 'Y'
-        s.axes_manager[1].units = 'm'
-        s.axes_manager[1].scale = self.y_array[1] - self.y_array[0]
-        return s
+        """
+            Creates a hyperspy.Signal1D object with the same spectral image.
+
+            The resulting hyperspy.Signal1D contains the full spectral image.
+            3D spectral images are made compatible by appending each z-image
+            onto the x-axis.
+
+            Returns
+            ----------
+                s : hyperspy.Signal1D
+                    hyperspy object
+                SpectralImage
+                    if 3d, with z-images appended to x-axis; self if 2d
+        """
+        (nz, ny, nx, nf) = np.shape(self.spec_im)
+
+        if nz == 1:
+            s = Signal1D(self.spec_im)
+            s.change_dtype('float64')
+            s.axes_manager[2].scale = self.spec_x_array[1] - \
+                self.spec_x_array[0]
+            s.axes_manager[2].offset = self.spec_x_array.min()
+            s.axes_manager[2].units = self.spec_units
+            if self.spec_units == 'nm':
+                s.axes_manager[2].name = '$\lambda$'
+            elif self.spec_units == 'eV':
+                s.axes_manager[2].name = '$E$'
+            s.axes_manager[0].name = 'x'
+            s.axes_manager[0].units = 'm'
+            s.axes_manager[0].scale = self.x_array[1] - self.x_array[0]
+            s.axes_manager[1].name = 'Y'
+            s.axes_manager[1].units = 'm'
+            s.axes_manager[1].scale = self.y_array[1] - self.y_array[0]
+            return s, self
+        else:
+            data = np.empty((ny, nx*nz, nf))
+            for kk in range(nz):
+                data[:, kk*nx:(kk+1)*nx, :] = self.spec_im[kk, :, :, :]
+
+            clone = PLSpectralImage(dat=self.dat)
+            clone.spec_im = data
+            clone.spec_x_array = self.spec_x_array
+            dx = self.x_array[1] - self.x_array[0]
+            dy = self.y_array[1] - self.y_array[0]
+            clone.x_array = dx*np.arange(nx*nz)
+            clone.y_array = dy*np.arange(ny)
+            clone.spec_units = 'nm'
+            clone.units = 'mm'
+
+            s = Signal1D(data)
+            s.change_dtype('float64')
+            s.axes_manager[2].scale = self.spec_x_array[1] - \
+                self.spec_x_array[0]
+            s.axes_manager[2].offset = self.spec_x_array.min()
+            s.axes_manager[2].units = self.spec_units
+            if self.spec_units == 'nm':
+                s.axes_manager[2].name = '$\lambda$'
+            elif self.spec_units == 'eV':
+                s.axes_manager[2].name = '$E$'
+            s.axes_manager[0].name = 'x'
+            s.axes_manager[0].units = '$\mu$m'
+            s.axes_manager[0].scale = self.x_array[1] - self.x_array[0]
+            s.axes_manager[0].scale *= 1e3
+            s.axes_manager[1].name = 'Y'
+            s.axes_manager[1].units = '$\mu$m'
+            s.axes_manager[1].scale = self.y_array[1] - self.y_array[0]
+            s.axes_manager[1].scale *= 1e3
+            return s, clone
 
     def plot_spec(self):
         self._plot_spec(self.get_spec(sum=True))
@@ -327,28 +686,12 @@ class SpectralImage(Sequence):
                 axis=tuple(range(len(self.spec_im.shape)))[:-1])
         else:
             assert isinstance(loc, tuple)
-            if len(self.spec_im.shape) == 3:
-                return self.spec_im[loc[0], loc[1], :]
-            elif len(self.spec_im.shape) == 4:
-                return self.spec_im[loc[0], loc[1], loc[2], :]
+            assert len(tuple) == 4
+            return self.spec_im[loc[0], loc[1], loc[2], :]
 
 
-class CLImage:
+class CLImage(Image):
     file_types = ['sync_raster_scan.h5', 'hyperspec_cl.h5']
-
-    def __init__(self, fname='', **kwargs):
-        self.load_h5_data(fname)
-        self.load_from_metadata()
-
-    def load_h5_data(self, fname):
-        abspath = os.path.abspath(fname)
-        try:
-            f = h5.File(abspath)
-            self.dat = h5_to_dictionary(f)
-        except Exception as ex:
-            print('Error loading from', fname, ex)
-        finally:
-            f.close()
 
     def load_from_metadata(self):
         dat = self.dat
@@ -378,19 +721,6 @@ class CLImage:
                 self.units = 'm'
                 self.spec_units = 'nm'
 
-    def _plot(self, map, percentile=5, cmap='viridis', **kwargs):
-        ax = plt.gca()
-        X, Y = np.meshgrid(self.y_array, self.x_array)
-        plt.imshow(map, cmap=cmap,
-                   vmin=np.percentile(map, percentile),
-                   vmax=np.percentile(map, 100-percentile))
-        plt.axis('equal')
-        plt.axis('off')
-
-        scalebar = ScaleBar(self.x_array[1]-self.x_array[0])
-        plt.gca().add_artist(scalebar)
-        return ax
-
     def get_adc(self, name):
         assert name in self.adc_names
         return self.adc_map[:, :, self.adc_names.index(name)]
@@ -407,14 +737,68 @@ class CLImage:
         ctr_map = self.get_ctr(name)
         return self._plot(ctr_map, percentile=percentile, cmap=cmap, **kwargs)
 
-    def is_supported(self, fname):
-        for ftype in self.file_types:
-            if ftype in fname:
-                return True
-        return False
-
 
 class CLSpectralImage(SpectralImage, CLImage):
+    """
+    Container for ScopeFoundry CL spectral images.
+
+    Container for loading and visualizing CL spectral images. Directly
+    indexable by spectral x values. Convenience functions for visualizing
+    CL spectral images and spectra.
+
+    Attributes
+    ----------
+        file_types : list
+            List of supported file file_types
+        dat : DictionaryTreeBrowser
+            metadata dictionary extracted from hdf tree
+        spec_im : numpy.ndarray
+            Spectral image array with shape
+            (num z values, num y values, num x values, num spectral values)
+        spec_x_array : numpy.array
+            Spectral x array
+        spec_units : str
+            Spectral units
+        x_array : numpy.array
+            Array of spatial x values
+        y_array : numpy.array
+            Array of spatial y values
+        z_array : numpy.array
+            Array of spatial z values
+        units : str
+            Spatial units
+
+    Methods
+    ----------
+        copy(signal=None)
+            Return a copy of the SpectralImage. If signal is a
+            hyperspy.Signal1D, the spectral image is overwritten with the data
+            in signal.
+        load_h5_data(fname)
+            Load the data from a given hdf5 file name
+        load_from_metadata()
+            Placeholder for subclasses to implement. Needs to assign values to
+            all attributes except file_types and dat
+        plot()
+            Plots a map of the spectral image summed along the spectral
+            direction
+        set_background()
+        remove_background()
+            Removes background correction from data
+        to_energy()
+            Converts and rebins from wavelength to energy. Returns a new
+            SpectralImage or subclass with the same metadata.
+        to_index()
+            Converts spectral x array to indices
+        to_signal()
+            Returns a hyperspy.Signal1D with of the spectral image
+        plot_spec()
+            Plots a spectrum summed over all spatial axes
+        get_spec()
+        is_supported(fname)
+            Checks to see if the string fname is in the list of supported file
+            types
+    """
     file_types = ["hyperspec_cl.h5", ]
 
     def __init__(self, fname='', dat=None):
@@ -423,13 +807,75 @@ class CLSpectralImage(SpectralImage, CLImage):
     def load_from_metadata(self):
         CLImage.load_from_metadata(self)
         M = self.dat['measurement'][self.file_types[0][:-3]]
-        self.spec_im = np.squeeze(M['spec_map']).copy()
+        self.spec_im = np.array(M['spec_map'])
         self.spec_x_array = np.array(M['wls'])
+        self.z_array = [0.0]
 
 
 class PLSpectralImage(SpectralImage):
+    """
+    Container for ScopeFoundry PL spectral images.
+
+    Container for loading and visualizing CL spectral images. Directly
+    indexable by spectral x values. Convenience functions for visualizing
+    CL spectral images and spectra. Capable of handling both 2D and 3D
+    spectral images.
+
+    Attributes
+    ----------
+        file_types : list
+            List of supported file file_types
+        dat : DictionaryTreeBrowser
+            metadata dictionary extracted from hdf tree
+        spec_im : numpy.ndarray
+            Spectral image array with shape
+            (num z values, num y values, num x values, num spectral values)
+        spec_x_array : numpy.array
+            Spectral x array
+        spec_units : str
+            Spectral units
+        x_array : numpy.array
+            Array of spatial x values
+        y_array : numpy.array
+            Array of spatial y values
+        z_array : numpy.array
+            Array of spatial z values
+        units : str
+            Spatial units
+
+    Methods
+    ----------
+        copy(signal=None)
+            Return a copy of the SpectralImage. If signal is a
+            hyperspy.Signal1D, the spectral image is overwritten with the data
+            in signal.
+        load_h5_data(fname)
+            Load the data from a given hdf5 file name
+        load_from_metadata()
+            Placeholder for subclasses to implement. Needs to assign values to
+            all attributes except file_types and dat
+        plot()
+            Plots a map of the spectral image summed along the spectral
+            direction
+        set_background()
+        remove_background()
+            Removes background correction from data
+        to_energy()
+            Converts and rebins from wavelength to energy. Returns a new
+            SpectralImage or subclass with the same metadata.
+        to_index()
+            Converts spectral x array to indices
+        to_signal()
+            Returns a hyperspy.Signal1D with of the spectral image
+        plot_spec()
+            Plots a spectrum summed over all spatial axes
+        get_spec()
+        is_supported(fname)
+            Checks to see if the string fname is in the list of supported file
+            types
+    """
     file_types = ['oo_asi_hyperspec_scan.h5', 'asi_OO_hyperspec_scan.h5',
-                  'andor_asi_hyperspec_scan.h5']
+                  'andor_asi_hyperspec_scan.h5', 'oo_asi_hyperspec_3d_scan.h5']
 
     def load_from_metadata(self):
         try:
@@ -441,9 +887,14 @@ class PLSpectralImage(SpectralImage):
                     # print(self.name)
                     M = dat['measurement'][meas]
                     self.spec_x_array = np.array(M['wls'])
-                    self.spec_im = np.squeeze(M['spec_map']).copy()
+                    self.spec_im = np.array(M['spec_map'])
                     self.x_array = np.array(M['h_array'])
                     self.y_array = np.array(M['v_array'])
+                    if 'z_array' in list(M.keys()):
+                        self.z_array = np.array(M['z_array'])
+                    else:
+                        stage = dat['hardware']['asi_stage']['settings']
+                        self.z_array = [stage['z_position']]
                     self.spec_units = 'nm'
                     self.units = 'mm'
 
@@ -461,98 +912,16 @@ class PLSpectralImage(SpectralImage):
 
 
 class PL3DSpectralImage(PLSpectralImage):
-
+    """
+    Experimental SpectralImage for native use of scikit-learn instead of using
+    Hyperspy as an intermediary.
+    """
     file_types = ['oo_asi_hyperspec_3d_scan.h5']
-
-    def load_from_metadata(self):
-        PLSpectralImage.load_from_metadata(self)
-        self.load_slices()
-        # self.spec_im = self.spec_im[0, :, :, :]
-
-    def load_slices(self):
-        if hasattr(self, 'dict'):
-            del self.dict
-        try:
-            dat = self.dat
-            for meas in self.file_types:
-                if meas[:-3] in list(dat['measurement'].keys()):
-                    self.z_array = np.array(
-                                   dat['measurement'][meas[:-3]]['z_array'])
-        except Exception as ex:
-            print('Error loading z_array values', ex)
-
-        z_stack_map = np.array(self.spec_im)
-        self.dict = OrderedDict()
-        for kk in range(len(self.z_array)):
-            key = '%0.4f' % self.z_array[kk]
-            img = SpectralImage(dat=self.dat)
-            img.spec_im = np.squeeze(z_stack_map[kk, :, :, :])
-            img.spec_x_array = np.array(self.spec_x_array)
-            img.x_array = np.array(self.x_array)
-            img.y_array = np.array(self.y_array)
-            img.spec_units = 'nm'
-            img.units = 'mm'
-            self.dict[key] = img
-
-    def plot(self, percentile=5, cmap='viridis', num_rows=1, **kwargs):
-        num_slices = np.size(self.z_array)
-        slice_list = self.get_slice_list()
-        num_cols = math.ceil(float(num_slices)/float(num_rows-1))
-        # print(num_rows, num_cols, num_slices)
-        for kk in range(num_slices):
-            # print('plot', kk)
-            plt.subplot(num_rows, num_cols, kk+1)
-            self.get_slice(slice_list[kk]).plot(
-                percentile=percentile, cmap=cmap,
-                title='z[%d] = %s mm' % (kk, slice_list[kk]),
-                **kwargs)
-        return plt.gcf()
 
     def __getitem__(self, i):
         clone = PLSpectralImage.__getitem__(self, i)
         clone.load_slices()
         return clone
-
-    def get_slice(self, key):
-        assert key in list(self.dict.keys())
-        return self.dict[key]
-
-    def get_slice_list(self):
-        return list(self.dict.keys())
-
-    def to_signal(self):
-        (nz, ny, nx, nf) = np.shape(self.spec_im)
-        data = np.empty((ny, nx*nz, nf))
-        for kk in range(nz):
-            data[:, kk*nx:(kk+1)*nx, :] = self.spec_im[kk, :, :, :]
-
-        clone = PLSpectralImage(dat=self.dat)
-        clone.spec_im = data
-        clone.spec_x_array = self.spec_x_array
-        dx = self.x_array[1] - self.x_array[0]
-        dy = self.y_array[1] - self.y_array[0]
-        clone.x_array = dx*np.arange(nx*nz)
-        clone.y_array = dy*np.arange(ny)
-        clone.spec_units = 'nm'
-        clone.units = 'mm'
-
-        s = Signal1D(data)
-        s.change_dtype('float64')
-        s.axes_manager[2].scale = (self.spec_x_array[1] - \
-                                   self.spec_x_array[0])*1e-3
-        s.axes_manager[2].offset = self.spec_x_array.min()
-        s.axes_manager[2].units = self.spec_units
-        if self.spec_units == 'nm':
-            s.axes_manager[2].name = '$\lambda$'
-        elif self.spec_units == 'eV':
-            s.axes_manager[2].name = '$E$'
-        s.axes_manager[0].name = 'x'
-        s.axes_manager[0].units = 'm'
-        s.axes_manager[0].scale = self.x_array[1] - self.x_array[0]
-        s.axes_manager[1].name = 'Y'
-        s.axes_manager[1].units = 'm'
-        s.axes_manager[1].scale = self.y_array[1] - self.y_array[0]
-        return s, clone
 
     def flatten(self, key=None):
         (nz, ny, nx, nf) = np.shape(self.spec_im)
