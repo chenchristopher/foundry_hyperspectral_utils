@@ -3,7 +3,7 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib_scalebar.scalebar import ScaleBar
-from hyperspy.signals import Signal1D
+from hyperspy.signals import Signal1D, BaseSignal
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import h5py as h5
 import scipy as sp
@@ -12,6 +12,7 @@ import re
 from copy import copy
 import math
 from sklearn.decomposition import PCA, FastICA, NMF
+import pyqtgraph as pg
 
 
 def h5_to_dictionary(fh, tree=None, level=''):
@@ -459,7 +460,8 @@ class SpectralImage(Sequence, Image):
         clone = type(self)(dat=self.dat)
         if signal is not None:
             assert isinstance(signal, Signal1D)
-            clone.spec_im = signal._data
+            clone.spec_im = np.empty((1,) + signal._data.shape)
+            clone.spec_im[0, :, :, :] = signal._data
         else:
             clone.spec_im = np.array(self.spec_im)
         clone.spec_x_array = np.array(self.spec_x_array)
@@ -482,7 +484,7 @@ class SpectralImage(Sequence, Image):
     def load_from_metadata(self):
         pass
 
-    def plot(self, z_index=None, num_rows=1, **kwargs):
+    def plot(self, z_index=None, num_rows=1, fig_rows=1, **kwargs):
         """
             Visualize spectral image
 
@@ -508,11 +510,10 @@ class SpectralImage(Sequence, Image):
             if np.size(self.z_array) == 1:
                 self.plot(z_index=0, **kwargs)
             else:
-                num_cols = math.ceil(float(nz)/float(num_rows-1))
-                # print(num_rows, num_cols, num_slices)
+                num_cols = math.ceil(float(nz)/num_rows)
                 for kk in range(nz):
-                    plt.subplot(num_rows, num_cols, kk + 1)
-                    self.plot(z_index=z_index, **kwargs)
+                    plt.subplot(num_rows+fig_rows-1, num_cols, kk + 1)
+                    self.plot(z_index=kk, **kwargs)
         else:
             assert isinstance(z_index, int)
             if z_index >= nz:
@@ -608,70 +609,60 @@ class SpectralImage(Sequence, Image):
             Creates a hyperspy.Signal1D object with the same spectral image.
 
             The resulting hyperspy.Signal1D contains the full spectral image.
-            3D spectral images are made compatible by appending each z-image
-            onto the x-axis.
 
             Returns
             ----------
                 s : hyperspy.Signal1D
                     hyperspy object
-                SpectralImage
-                    if 3d, with z-images appended to x-axis; self if 2d
         """
         (nz, ny, nx, nf) = np.shape(self.spec_im)
 
+        if self.units == 'mm':
+            si_scale = 1e-3
+
+        dx = self.x_array[1] - self.x_array[0]
+        dy = self.y_array[1] - self.y_array[0]
+        dz = self.z_array[1] - self.z_array[0]
+        dx *= si_scale
+        dy *= si_scale
+        dz *= si_scale
+
+        dx = pg.fn.siFormat(dx, suffix='m')
+        dy = pg.fn.siFormat(dy, suffix='m')
+        x_units = dx[-2:]
+        y_units = dy[-2:]
+        dx = float(dx[:-3])
+        dy = float(dy[:-3])
+
+        spec_name = 'index'
+        if self.spec_units in ['nm', 'um']:
+            spec_name = 'Wavelength'
+        elif self.spec_units == 'eV':
+            spec_name = 'E'
+
+        dict_y = {'name': 'y', 'units': y_units,
+                  'scale': dy,
+                  'size': ny}
+        dict_x = {'name': 'x', 'units': x_units,
+                  'scale': dx,
+                  'size': nx}
+        dict_f = {'name': spec_name, 'units': self.spec_units,
+                  'scale': self.spec_x_array[1] - self.spec_x_array[0],
+                  'size': nf, 'offset': self.spec_x_array[0]}
+
         if nz == 1:
-            s = Signal1D(self.spec_im)
+            s = Signal1D(self.spec_im, axes=[dict_y, dict_x, dict_f])
             s.change_dtype('float64')
-            s.axes_manager[2].scale = self.spec_x_array[1] - \
-                self.spec_x_array[0]
-            s.axes_manager[2].offset = self.spec_x_array.min()
-            s.axes_manager[2].units = self.spec_units
-            if self.spec_units == 'nm':
-                s.axes_manager[2].name = '$\lambda$'
-            elif self.spec_units == 'eV':
-                s.axes_manager[2].name = '$E$'
-            s.axes_manager[0].name = 'x'
-            s.axes_manager[0].units = 'm'
-            s.axes_manager[0].scale = self.x_array[1] - self.x_array[0]
-            s.axes_manager[1].name = 'Y'
-            s.axes_manager[1].units = 'm'
-            s.axes_manager[1].scale = self.y_array[1] - self.y_array[0]
-            return s, self
+            return s
         else:
-            data = np.empty((ny, nx*nz, nf))
-            for kk in range(nz):
-                data[:, kk*nx:(kk+1)*nx, :] = self.spec_im[kk, :, :, :]
-
-            clone = PLSpectralImage(dat=self.dat)
-            clone.spec_im = data
-            clone.spec_x_array = self.spec_x_array
-            dx = self.x_array[1] - self.x_array[0]
-            dy = self.y_array[1] - self.y_array[0]
-            clone.x_array = dx*np.arange(nx*nz)
-            clone.y_array = dy*np.arange(ny)
-            clone.spec_units = 'nm'
-            clone.units = 'mm'
-
-            s = Signal1D(data)
-            s.change_dtype('float64')
-            s.axes_manager[2].scale = self.spec_x_array[1] - \
-                self.spec_x_array[0]
-            s.axes_manager[2].offset = self.spec_x_array.min()
-            s.axes_manager[2].units = self.spec_units
-            if self.spec_units == 'nm':
-                s.axes_manager[2].name = '$\lambda$'
-            elif self.spec_units == 'eV':
-                s.axes_manager[2].name = '$E$'
-            s.axes_manager[0].name = 'x'
-            s.axes_manager[0].units = '$\mu$m'
-            s.axes_manager[0].scale = self.x_array[1] - self.x_array[0]
-            s.axes_manager[0].scale *= 1e3
-            s.axes_manager[1].name = 'Y'
-            s.axes_manager[1].units = '$\mu$m'
-            s.axes_manager[1].scale = self.y_array[1] - self.y_array[0]
-            s.axes_manager[1].scale *= 1e3
-            return s, clone
+            dz = pg.fn.siFormat(dz, suffix='m')
+            z_units = dz[-2:]
+            dz = float(dz[:-3])
+            dict_z = {'name': 'z', 'units': z_units,
+                      'scale': dz,
+                      'size': nz}
+            s = BaseSignal(self.spec_im, axes=[dict_z, dict_y, dict_x, dict_f])
+            return s.as_signal1D(0)
 
     def plot_spec(self):
         self._plot_spec(self.get_spec(sum=True))
@@ -917,11 +908,6 @@ class PL3DSpectralImage(PLSpectralImage):
     Hyperspy as an intermediary.
     """
     file_types = ['oo_asi_hyperspec_3d_scan.h5']
-
-    def __getitem__(self, i):
-        clone = PLSpectralImage.__getitem__(self, i)
-        clone.load_slices()
-        return clone
 
     def flatten(self, key=None):
         (nz, ny, nx, nf) = np.shape(self.spec_im)
