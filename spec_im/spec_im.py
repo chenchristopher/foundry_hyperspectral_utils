@@ -287,7 +287,9 @@ class Image:
         X, Y = np.meshgrid(self.x_array, self.y_array)
         img = plt.pcolormesh(X, Y, map, **pcolormesh_kwargs)
         plt.axis('equal')
-
+        plt.axis('tight')
+        plt.xlabel(self.units)
+        plt.ylabel(self.units)
         if 'show_axes' in kwlist:
             if not kwargs['show_axes']:
                 plt.axis('off')
@@ -381,7 +383,6 @@ class SpectralImage(Sequence, Image):
             Checks to see if the string fname is in the list of supported file
             types
     """
-    file_types = []
 
     def __init__(self, fname='', dat=None):
         """
