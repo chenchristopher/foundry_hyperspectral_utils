@@ -309,15 +309,18 @@ class Image:
                                     **scalebar_kwargs)
                 plt.gca().add_artist(scalebar)
 
+        cbar_kwargs = {}
+        if 'cbar_orientation' in kwlist:
+            cbar_kwargs['orientation'] = kwargs['cbar_orientation']
+        if 'cbar_position' in kwlist:
+            cbar_kwargs['position'] = kwargs['cbar_position']
         if 'show_cbar' in kwlist:
             assert isinstance(kwargs['show_cbar'], bool)
             if kwargs['show_cbar']:
-                cbar_kwargs = {}
-                if 'cbar_orientation' in kwlist:
-                    cbar_kwargs['orientation'] = kwargs['cbar_orientation']
-                if 'cbar_position' in kwlist:
-                    cbar_kwargs['position'] = kwargs['cbar_position']
                 colorbar(img, **cbar_kwargs)
+        else:
+            colorbar(img, **cbar_kwargs)
+
         return ax
 
 # TODO - update subclasses to only support 4D spec_im
