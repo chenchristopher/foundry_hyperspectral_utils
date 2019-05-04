@@ -286,8 +286,9 @@ class Image:
         ax = plt.gca()
         X, Y = np.meshgrid(self.x_array, self.y_array)
         img = plt.pcolormesh(X, Y, map, **pcolormesh_kwargs)
-        plt.axis('equal')
-        plt.axis('tight')
+        ax.set_aspect('equal')
+        ax.autoscale(tight=True)
+
         plt.xlabel(self.units)
         plt.ylabel(self.units)
         if 'show_axes' in kwlist:
