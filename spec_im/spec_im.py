@@ -609,6 +609,26 @@ class SpectralImage(Sequence, Image):
         clone.spec_units = 'index'
         return clone
 
+    def get_unit_scaling(self):
+        (nz, ny, nx, nf) = np.shape(self.spec_im)
+
+        if self.units == 'mm':
+            si_scale = 1e-3
+        elif self.units == 'um':
+            si_scale = 1e-6
+        else:
+            si_scale = 1
+
+        Dxy = max((self.x_array[-1] - self.x_array[0],
+                   self.y_array[-1] - self.y_array[0]))
+        Dxy *= si_scale
+
+        xy_str = pg.fn.siFormat(Dxy, suffix='m')
+        units = xy_str[-2:]
+        dxy = float(xy_str[:-3])
+        scale = dxy/Dxy
+        return (units, scale)
+
     def to_signal(self):
         """
             Creates a hyperspy.Signal1D object with the same spectral image.
@@ -624,20 +644,15 @@ class SpectralImage(Sequence, Image):
 
         if self.units == 'mm':
             si_scale = 1e-3
-
-        dx = self.x_array[1] - self.x_array[0]
-        dy = self.y_array[1] - self.y_array[0]
-        dz = self.z_array[1] - self.z_array[0]
-        dx *= si_scale
-        dy *= si_scale
-        dz *= si_scale
-
-        dx = pg.fn.siFormat(dx, suffix='m')
-        dy = pg.fn.siFormat(dy, suffix='m')
-        x_units = dx[-2:]
-        y_units = dy[-2:]
-        dx = float(dx[:-3])
-        dy = float(dy[:-3])
+        elif self.units == 'um':
+            si_scale = 1e-6
+        else:
+            si_scale = 1
+        dx = (self.x_array[1] - self.x_array[0])*si_scale
+        dy = (self.y_array[1] - self.y_array[0])*si_scale
+        (units, scale) = self.get_unit_scaling()
+        dx *= scale
+        dy *= scale
 
         spec_name = 'index'
         if self.spec_units in ['nm', 'um']:
@@ -645,10 +660,10 @@ class SpectralImage(Sequence, Image):
         elif self.spec_units == 'eV':
             spec_name = 'E'
 
-        dict_y = {'name': 'y', 'units': y_units,
+        dict_y = {'name': 'y', 'units': units,
                   'scale': dy,
                   'size': ny}
-        dict_x = {'name': 'x', 'units': x_units,
+        dict_x = {'name': 'x', 'units': units,
                   'scale': dx,
                   'size': nx}
         dict_f = {'name': spec_name, 'units': self.spec_units,
@@ -660,10 +675,9 @@ class SpectralImage(Sequence, Image):
             s.change_dtype('float64')
             return s
         else:
-            dz = pg.fn.siFormat(dz, suffix='m')
-            z_units = dz[-2:]
-            dz = float(dz[:-3])
-            dict_z = {'name': 'z', 'units': z_units,
+            dz = (self.z_array[1] - self.z_array[0])*si_scale
+            dz *= scale
+            dict_z = {'name': 'z', 'units': units,
                       'scale': dz,
                       'size': nz}
             s = BaseSignal(self.spec_im, axes=[dict_z, dict_y, dict_x, dict_f])
