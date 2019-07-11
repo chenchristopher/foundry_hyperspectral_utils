@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.gridspec as gspec
 from qtpy import QtWidgets
 import spec_im as si
+import math
 
 
 def plot_si_bands(spec_im, *args, **kwargs):
@@ -26,13 +27,8 @@ def plot_si_bands(spec_im, *args, **kwargs):
     assert isinstance(spec_im, si.SpectralImage)
     f_h = plt.figure()
 
-    if 'percentile' in kwargs.keys():
-        percentile = kwargs['percentile']
-    else:
-        percentile = 5
-
     if 'no_of_cols' in kwargs.keys():
-        no_of_cols = kwargs['no_of_cols']
+        no_of_cols = kwargs.pop('no_of_cols')
     else:
         no_of_cols = 3
 
@@ -52,7 +48,7 @@ def plot_si_bands(spec_im, *args, **kwargs):
     for arg in args:
         coord = np.where(subplotindxs == i)
         plt.subplot(gs[coord[0][0], coord[1][0]])
-        ax = spec_im[arg[0]:arg[1]].plot(percentile=percentile)
+        ax = spec_im[arg[0]:arg[1]].plot(**kwargs)
         if units == 'eV':
             ax.set_title('%s from %0.1f to %0.1f %s' % (arg[3], arg[0], arg[1],
                                                         units))
@@ -71,37 +67,36 @@ def gui_fname(dir=None):
     fname = QtWidgets.QFileDialog.getOpenFileName(None, "select data file...", dir, filter="h5 files (*.h5)")
     return fname[0]
 
-def plot_cl_summary(spec_im):
+def plot_cl_summary(spec_im, **kwargs):
     assert isinstance(spec_im, si.CLSpectralImage)
     f0, ax0 = plt.subplots(3, 3, subplot_kw=dict(polar=True))
 
     plt.subplot(3,3,1)
-    se2 = spec_im.plot_adc('SE2', cmap='gray', cbar=False)
+    se2 = spec_im.plot_adc('SE2', cmap='gray', cbar=False, **kwargs)
     se2.set_title('SE2')
 
     plt.subplot(3,3,2)
-    il = spec_im.plot_adc('InLens',cmap='gray', cbar=False)
+    il = spec_im.plot_adc('InLens',cmap='gray', cbar=False, **kwargs)
     il.set_title('InLens')
 
     plt.subplot(3,3,3)
-    T = spec_im.plot_adc('ai3',cmap='gray')
+    T = spec_im.plot_adc('ai3',cmap='gray', **kwargs)
     T.set_title('ai3')
 
-
     plt.subplot(3,3,4)
-    c0 = spec_im.plot_ctr('ctr0')
+    c0 = spec_im.plot_ctr('ctr0', **kwargs)
     c0.set_title('ctr0')
 
     plt.subplot(3,3,5)
-    c1 = spec_im.plot_ctr('ctr1')
+    c1 = spec_im.plot_ctr('ctr1', **kwargs)
     c1.set_title('ctr1')
 
     plt.subplot(3,3,6)
-    c2 = spec_im.plot_ctr('ctr2')
+    c2 = spec_im.plot_ctr('ctr2', **kwargs)
     c2.set_title('ctr2')
 
     plt.subplot(3,3,7)
-    sisum = spec_im.plot()
+    sisum = spec_im.plot(**kwargs)
     sisum.set_title('SI')
 
     plt.subplot(3,3,(8,9))
@@ -116,39 +111,63 @@ def plot_cl_summary(spec_im):
 
 
 def plot_pl_summary(specim, **kwargs):
+    """
+    Quick visualization of a 3D spectral image.
+
+    Plots the summed spectral map and a spectrum of each z level within a 3D
+    spectral image. Can pass additional keyword arguments to
+    spec_im.SpectralImage.plot() for axis, colorbar, and scalebar control.
+
+    Arguments
+    ----------
+        specim : spec_im.PLSpectralImage
+            Spectral image to visualize.
+        kwargs : dict, optional
+            Additional arguments that are passed to
+            spec_im.SpectralImage.plot()
+
+    Returns
+    ----------
+        matplotlib.pyplot.figure
+    """
     assert isinstance(specim, si.PLSpectralImage)
+
     f = plt.figure()
-    plt.subplot(2, 3, 1)
-    specim.plot()
+    nz = len(specim.z_array)
 
-    plt.subplot(2, 3, (2, 3))
-    specim.plot_spec()
+    num_rows = nz
+    if 'num_rows' in list(kwargs.keys()):
+        num_rows = kwargs['num_rows']
 
-    esi = specim.to_energy()
-    plt.subplot(2, 3, 4)
-    esi.plot()
-    plt.tight_layout(h_pad=1)
-    return f
+    num_figs = math.ceil(float(nz)/num_rows)
+    (units, scale) = specim.get_unit_scaling()
+    for jj in range(num_figs):
+        if jj > 0:
+            plt.figure()
+        for kk in range(num_rows):
+            index = kk+jj*num_rows
+            if index == nz:
+                break
+            plt.subplot(num_rows, 2, 2*kk+1)
+            specim.plot(z_index=index, **kwargs)
+            plt.subplot(num_rows, 2, 2*kk+2)
 
-    plt.subplot(2, 3, (5, 6))
-    esi.plot_spec()
+            z_label = ''
+            if nz > 1:
+                z_val = (specim.z_array[index]-specim.z_array[0])*scale
+                z_label = 'z = %0.1f %s' % (z_val, units)
+            specim.plot_spec(z_index=index, title=z_label)
+        if nz == 1:
+            plt.suptitle(specim.name)
+        else:
+            plt.suptitle('%s fig %d of %d' % (specim.name, jj+1, num_figs))
+        plt.tight_layout(h_pad=1)
+        plt.subplots_adjust(top=0.95)
 
-
-def plot_pl_3d_summary(specim, num_rows=2, **kwargs):
-    assert isinstance(specim, si.PLSpectralImage)
-    f = plt.figure()
-    specim.plot(num_rows=num_rows, cbar_orientation='vertical',
-                cbar_position='right')
-
-    plt.subplot(num_rows, 1, num_rows)
-    specim.plot_spec()
-
-    plt.suptitle(specim.name)
-    plt.tight_layout(h_pad=1)
     return f
 
 def plot_hs_results(loadings, factors, spec_im, no_of_bands=4, title='',
-                    cmap='plasma'):
+                    cmap='plasma', **kwargs):
     # grab the blind source separation loadings and factors
     loading_list = loadings.split()
     factor_list = factors.split()
@@ -178,7 +197,7 @@ def plot_hs_results(loadings, factors, spec_im, no_of_bands=4, title='',
             plt.subplot(no_of_rows, 3, 3*ll+1)
             ax = spec_im._plot(loading_list[lx].data, cmap=cmap,
                                cbar_orientation='vertical',
-                               cbar_position='right')
+                               cbar_position='right', **kwargs)
             ax.set_title(lx)
             ax.set_xlabel('m')
             ax.set_ylabel('m')
@@ -199,18 +218,18 @@ def plot_hs_results(loadings, factors, spec_im, no_of_bands=4, title='',
 
 
 def plot_bss_results(s, spec_im, title='', cmap='gray', fig_rows=4,
-                     components=8, max_iter=1000):
+                     components=8, max_iter=1000, **kwargs):
     s.blind_source_separation(number_of_components=components,
                               on_loadings=True, max_iter=max_iter)
     return plot_hs_results(s.get_bss_loadings(), s.get_bss_factors(),
                            spec_im, title=title, cmap=cmap,
-                           no_of_bands=fig_rows)
+                           no_of_bands=fig_rows, **kwargs)
 
 
 def plot_decomp_results(s, spec_im, title='', cmap='gray', fig_rows=4,
-                        algorithm='nmf', output_dimension=8):
+                        algorithm='nmf', output_dimension=8, **kwargs):
     s.decomposition(algorithm=algorithm, output_dimension=output_dimension)
     return plot_hs_results(s.get_decomposition_loadings(),
                            s.get_decomposition_factors(),
                            spec_im, title=title, cmap=cmap,
-                           no_of_bands=fig_rows)
+                           no_of_bands=fig_rows, **kwargs)

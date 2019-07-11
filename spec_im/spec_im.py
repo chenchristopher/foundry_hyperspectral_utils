@@ -11,7 +11,6 @@ from hyperspy.misc.utils import DictionaryTreeBrowser
 import re
 from copy import copy
 import math
-from sklearn.decomposition import PCA, FastICA, NMF
 import pyqtgraph as pg
 
 
@@ -219,6 +218,35 @@ class Image:
                 return True
         return False
 
+    def get_unit_scaling(self):
+        """
+        Returns the SI units and scale factor for the spatial dimensions
+
+        Returns
+        ----------
+            tuple : (units, scale)
+                units : str
+                    SI unit appropriate for x and y dimensions of image
+                scale : float
+                    Correction factor for native spatial units (x value * scale
+                    = x value in SI unit units)
+        """
+        if self.units == 'mm':
+            si_scale = 1e-3
+        elif self.units == 'um':
+            si_scale = 1e-6
+        else:
+            si_scale = 1
+
+        Dxy = max((self.x_array[-1] - self.x_array[0],
+                   self.y_array[-1] - self.y_array[0]))
+
+        xy_str = pg.fn.siFormat(Dxy*si_scale, suffix='m')
+        units = xy_str[-2:]
+        dxy = float(xy_str[:-3])
+        scale = dxy/Dxy
+        return (units, scale)
+
     def _plot(self, map, **kwargs):
         """
         Plots 2D map with spatial dimensions of the image
@@ -284,13 +312,16 @@ class Image:
             pcolormesh_kwargs['vmax'] = np.nanpercentile(map, 95)
 
         ax = plt.gca()
-        X, Y = np.meshgrid(self.x_array, self.y_array)
+        (units, scale) = self.get_unit_scaling()
+        x_array = (self.x_array - self.x_array[0]) * scale
+        y_array = (self.y_array - self.y_array[0]) * scale
+        X, Y = np.meshgrid(x_array, y_array)
         img = plt.pcolormesh(X, Y, map, **pcolormesh_kwargs)
         ax.set_aspect('equal')
         ax.autoscale(tight=True)
 
-        plt.xlabel(self.units)
-        plt.ylabel(self.units)
+        plt.xlabel(units)
+        plt.ylabel(units)
         if 'show_axes' in kwlist:
             if not kwargs['show_axes']:
                 plt.axis('off')
@@ -305,7 +336,9 @@ class Image:
                 if 'scalebar_position' in kwlist:
                     scalebar_kwargs['location'] = kwargs[
                         'scalebar_position']
-                scalebar = ScaleBar(self.x_array[1]-self.x_array[0], units='m',
+                elif 'scalebar_alpha' in kwlist:
+                    scalebar_kwargs['box_alpha'] = kwargs['scalebar_alpha']
+                scalebar = ScaleBar(x_array[1]-x_array[0], units=units,
                                     **scalebar_kwargs)
                 plt.gca().add_artist(scalebar)
 
@@ -323,10 +356,147 @@ class Image:
 
         return ax
 
-# TODO - update subclasses to only support 4D spec_im
+
+class Spectrum(Sequence):
+    """
+    Base class for a spectrum.
+
+    Attributes
+    ----------
+        spec : numpy.array
+            Spectrum array
+        spec_x_array : numpy.array
+            Spectral x array
+        spec_units : str
+            Spectral units
+
+    Methods
+    ----------
+        copy(signal=None)
+            Return a copy of the SpectralImage. If signal is a
+            hyperspy.Signal1D, the spectral image is overwritten with the data
+            in signal.
+        plot_spec(title='')
+            Plot spectrum
+        to_energy()
+            Converts and rebins from wavelength to energy. Returns a new
+            SpectralImage or subclass with the same metadata.
+        to_index()
+            Converts spectral x array to indices
+        to_signal()
+            Returns a hyperspy.Signal1D with of the spectral image
+
+    """
+
+    def plot_spec(self, title='', **kwargs):
+        self._plot_spec(self.spec, title=title)
+
+    def _plot_spec(self, spec, title=''):
+        plt.plot(self.spec_x_array, spec)
+        ax = plt.gca()
+        ax.ticklabel_format(axis='y', style='sci', scilimits=(-2, 2))
+        plt.xlabel(self.spec_units)
+        plt.title(title)
+
+    def __len__(self):
+        return len(self.spec_x_array)
+
+    def _getitem_helper(self, i):
+        if isinstance(i, slice):
+            ind_min = np.searchsorted(self.spec_x_array, i.start)
+            ind_max = np.searchsorted(self.spec_x_array, i.stop)
+            if ind_min < 0:
+                ind_min = 0
+            elif ind_min >= len(self.spec_x_array):
+                ind_min = len(self.spec_x_array) - 1
+
+            if ind_max < 0:
+                ind_max = 0
+            elif ind_max >= len(self.spec_x_array):
+                ind_max = len(self.spec_x_array) - 1
+
+            spec = self.spec[ind_min:ind_max]
+            spec_x_array = self.spec_x_array[ind_min:ind_max]
+        else:
+            ind = np.searchsorted(self.spec_x_array, i)
+            if ind < 0:
+                ind = 0
+            elif ind >= len(self.spec_x_array):
+                ind = len(self.spec_x_array) - 1
+
+            spec = self.spec[ind]
+            spec_x_array = self.spec_x_array[ind]
+
+        return np.array(spec), np.array(spec_x_array)
+
+    def __getitem__(self, i):
+        spec, spec_x_array = self._getitem_helper(i)
+
+        clone = Spectrum()
+        clone.spec_x_array = spec_x_array
+        clone.spec = spec
+        return clone
+
+    def to_energy(self):
+        """
+            Returns Spectrum rebinned to energy units
+        """
+        if self.spec_units == 'nm':
+            ne = len(self.spec_x_array)
+            En_wls = 1240/self.spec_x_array
+            icorr = self.spec_x_array**2
+
+            En = np.linspace(En_wls[-1], En_wls[0], ne)
+            spec_interp = sp.interpolate.interp1d(En_wls, self.spec * icorr)
+            En_spec = spec_interp(En)
+
+            clone = self.copy()
+            clone.spec_im = En_spec
+            clone.spec_x_array = En
+            clone.spec_units = 'eV'
+            return clone
+        elif self.spec_units == 'eV':
+            return self
+        else:
+            raise Exception('Cannot convert from %s to eV' % self.spec_units)
+            return None
+
+    def to_index(self):
+        """
+            Returns SpectralImage with index as spectral unit
+        """
+        clone = self.copy()
+        clone.spec_x_array = np.linspace(len(self.spec_x_array))
+        clone.spec_units = 'index'
+        return clone
+
+    def to_signal(self):
+        """
+            Creates a hyperspy.Signal1D object with the same spectrum
+
+            Returns
+            ----------
+                s : hyperspy.Signal1D
+                    hyperspy object
+        """
+        nf = np.len(self.spec_x_array)
+
+        spec_name = 'index'
+        if self.spec_units in ['nm', 'um']:
+            spec_name = 'Wavelength'
+        elif self.spec_units == 'eV':
+            spec_name = 'E'
+
+        dict_f = {'name': spec_name, 'units': self.spec_units,
+                  'scale': self.spec_x_array[1] - self.spec_x_array[0],
+                  'size': nf, 'offset': self.spec_x_array[0]}
+
+        s = Signal1D(np.squeeze(self.spec_im), axes=[dict_f])
+        s.change_dtype('float64')
+        return s
 
 
-class SpectralImage(Sequence, Image):
+class SpectralImage(Spectrum, Image):
     """
     Base class for a spectral image.
 
@@ -465,8 +635,8 @@ class SpectralImage(Sequence, Image):
         clone = type(self)(dat=self.dat)
         if signal is not None:
             assert isinstance(signal, Signal1D)
-            clone.spec_im = np.empty((1,) + signal._data.shape)
-            clone.spec_im[0, :, :, :] = signal._data
+            clone.spec_im = np.empty(signal._data.shape)
+            clone.spec_im = signal._data
         else:
             clone.spec_im = np.array(self.spec_im)
         clone.spec_x_array = np.array(self.spec_x_array)
@@ -513,7 +683,7 @@ class SpectralImage(Sequence, Image):
         nz = np.size(self.z_array)
         if z_index is None:
             if np.size(self.z_array) == 1:
-                self.plot(z_index=0, **kwargs)
+                return self.plot(z_index=0, **kwargs)
             else:
                 num_cols = math.ceil(float(nz)/num_rows)
                 for kk in range(nz):
@@ -525,8 +695,9 @@ class SpectralImage(Sequence, Image):
                 err = 'Cannot access z_index %d in z_array size %d' % (
                     z_index, nz)
                 raise IndexError(err)
+                return
             spec_map = self.spec_im[z_index, :, :, :].sum(axis=-1)
-            self._plot(spec_map, **kwargs)
+            return self._plot(spec_map, **kwargs)
 
     def set_background(self, lims=(-1.0, -1.0), zero_negative_values=True,
                        append=False):
@@ -609,27 +780,7 @@ class SpectralImage(Sequence, Image):
         clone.spec_units = 'index'
         return clone
 
-    def get_unit_scaling(self):
-        (nz, ny, nx, nf) = np.shape(self.spec_im)
-
-        if self.units == 'mm':
-            si_scale = 1e-3
-        elif self.units == 'um':
-            si_scale = 1e-6
-        else:
-            si_scale = 1
-
-        Dxy = max((self.x_array[-1] - self.x_array[0],
-                   self.y_array[-1] - self.y_array[0]))
-        Dxy *= si_scale
-
-        xy_str = pg.fn.siFormat(Dxy, suffix='m')
-        units = xy_str[-2:]
-        dxy = float(xy_str[:-3])
-        scale = dxy/Dxy
-        return (units, scale)
-
-    def to_signal(self):
+    def to_signal(self, mask=None):
         """
             Creates a hyperspy.Signal1D object with the same spectral image.
 
@@ -642,14 +793,8 @@ class SpectralImage(Sequence, Image):
         """
         (nz, ny, nx, nf) = np.shape(self.spec_im)
 
-        if self.units == 'mm':
-            si_scale = 1e-3
-        elif self.units == 'um':
-            si_scale = 1e-6
-        else:
-            si_scale = 1
-        dx = (self.x_array[1] - self.x_array[0])*si_scale
-        dy = (self.y_array[1] - self.y_array[0])*si_scale
+        dx = (self.x_array[1] - self.x_array[0])
+        dy = (self.y_array[1] - self.y_array[0])
         (units, scale) = self.get_unit_scaling()
         dx *= scale
         dy *= scale
@@ -669,31 +814,30 @@ class SpectralImage(Sequence, Image):
         dict_f = {'name': spec_name, 'units': self.spec_units,
                   'scale': self.spec_x_array[1] - self.spec_x_array[0],
                   'size': nf, 'offset': self.spec_x_array[0]}
+        dict_z = {'name': 'z', 'units': units, 'size': nz}
 
         if nz == 1:
-            s = Signal1D(self.spec_im, axes=[dict_y, dict_x, dict_f])
+            s = Signal1D(np.squeeze(self.spec_im),
+                         axes=[dict_y, dict_x, dict_f],
+                         mask=mask)
             s.change_dtype('float64')
             return s
         else:
-            dz = (self.z_array[1] - self.z_array[0])*si_scale
-            dz *= scale
-            dict_z = {'name': 'z', 'units': units,
-                      'scale': dz,
-                      'size': nz}
+            dz = (self.z_array[1] - self.z_array[0])*scale
+            dict_z['scale'] = dz
             s = BaseSignal(self.spec_im, axes=[dict_z, dict_y, dict_x, dict_f])
+            s.change_dtype('float64')
             return s.as_signal1D(0)
 
-    def plot_spec(self):
-        self._plot_spec(self.get_spec(sum=True))
+    def plot_spec(self, z_index=None, title=''):
+        self._plot_spec(self.get_spec(z_index=z_index), title=title)
 
-    def _plot_spec(self, spec):
-        plt.plot(self.spec_x_array, spec)
-        plt.xlabel(self.spec_units)
-
-    def get_spec(self, loc=None, sum=False):
-        if sum:
+    def get_spec(self, loc=None, sum=False, z_index=None):
+        if loc is None and z_index is None:
             return self.spec_im.sum(
                 axis=tuple(range(len(self.spec_im.shape)))[:-1])
+        elif loc is None:
+            return self.spec_im[z_index, :, :, :].sum(axis=(0, 1))
         else:
             assert isinstance(loc, tuple)
             assert len(tuple) == 4
@@ -817,7 +961,8 @@ class CLSpectralImage(SpectralImage, CLImage):
     def load_from_metadata(self):
         CLImage.load_from_metadata(self)
         M = self.dat['measurement'][self.file_types[0][:-3]]
-        self.spec_im = np.array(M['spec_map'])
+        self.spec_im = np.squeeze(M['spec_map'])
+        self.spec_im = np.reshape(self.spec_im, (1,) + self.spec_im.shape)
         self.spec_x_array = np.array(M['wls'])
         self.z_array = [0.0]
 
@@ -898,6 +1043,10 @@ class PLSpectralImage(SpectralImage):
                     M = dat['measurement'][meas]
                     self.spec_x_array = np.array(M['wls'])
                     self.spec_im = np.array(M['spec_map'])
+                    if len(self.spec_im.shape) == 3:
+                        self.spec_im = np.reshape(
+                            self.spec_im, (1,) + self.spec_im.shape)
+                    # print(self.spec_im.shape, M['spec_map'].shape)
                     self.x_array = np.array(M['h_array'])
                     self.y_array = np.array(M['v_array'])
                     if 'z_array' in list(M.keys()):
@@ -911,197 +1060,9 @@ class PLSpectralImage(SpectralImage):
                     # print('Sample: ' + self.name)
                     map_min = np.amin(self.spec_im)
                     if map_min < 0:
-                        # print('Correcting negative minimum value in spec map:',
-                        #       map_min)
                         self.spec_im += 1e-2 - map_min
                     # print('%d x %d spatial x %d spectral points' % (
                     #     len(self.x_array), len(self.y_array),
                     #     len(self.spec_x_array)))
         except Exception as ex:
             print('Error loading from dictionary', ex)
-
-
-class PL3DSpectralImage(PLSpectralImage):
-    """
-    Experimental SpectralImage for native use of scikit-learn instead of using
-    Hyperspy as an intermediary.
-    """
-    file_types = ['oo_asi_hyperspec_3d_scan.h5']
-
-    def flatten(self, key=None):
-        (nz, ny, nx, nf) = np.shape(self.spec_im)
-        nf = np.size(self.spec_x_array)
-        spec_im = self.spec_im
-        if key is not None:
-            spec_im = self.get_slice(key).spec_im
-            nz = 1
-
-        if hasattr(self, 'mask'):
-            mask = self.mask['full']
-            nm = np.count_nonzero(self.mask['base'].flatten())
-            nonzero_inds = np.nonzero(mask.flatten())[0]
-            return np.reshape(spec_im.flatten()[nonzero_inds], (nm*nz, nf))
-        else:
-            return np.reshape(spec_im, (nz*nx*ny, nf))
-
-    def apply_mask(self, mask, **kwargs):
-        if hasattr(self, 'mask'):
-            del self.mask
-
-        (nz, ny, nx, nf) = np.shape(self.spec_im)
-        nf = np.size(self.spec_x_array)
-        self.mask = {}
-        self.mask['base'] = mask
-
-        self.mask['loadings'] = np.empty((nz, ny*nx))
-        for kk in range(nz):
-            self.mask['loadings'][kk, :] = mask.flatten()
-        self.mask['loadings'] = np.reshape(self.mask['loadings'], (nz, ny, nx))
-
-        self.mask['full'] = np.empty((nz*ny*nx, nf))
-        for ll in range(nf):
-            self.mask['full'][:, ll] = self.mask['loadings'].flatten()
-        self.mask['full'] = np.reshape(self.mask['full'], (nz, ny, nx, nf))
-        print('spec_im', np.size(self.spec_im),
-              'full mask', np.size(self.mask['full']))
-
-    def remove_mask(self, mask):
-        if hasattr(self, 'mask'):
-            del self.mask
-
-    def reshape(self, arr, key=None):
-        arr = arr.T
-        (nz, ny, nx, nf) = np.shape(self.spec_im)
-        print('array shape', arr.shape)
-        nc = arr.shape[0]  # number of components
-        if key is not None:
-            nz = 1
-
-        data = arr
-        if hasattr(self, 'mask'):
-            mask = np.empty((nc, nz*ny*nx))
-            for kk in range(nc):
-                mask[kk, :] = self.mask['loadings'].flatten()
-
-            data = np.empty(nc*nz*ny*nx)
-            data[:] = np.nan
-            print('data shape', data.shape)
-            nonzero_inds = np.nonzero(mask.flatten())
-            print(np.shape(nonzero_inds), type(nonzero_inds))
-            data[nonzero_inds[0]] = arr.flatten()
-
-        print(data.shape, (nc, nz, ny, nx))
-        data = np.reshape(data, (nc, nz, ny, nx))
-        return np.squeeze(data)
-
-    def fit_pca(self, **kwargs):
-        if hasattr(self, 'decomp'):
-            del self.decomp
-        if hasattr(self, 'decomp_comps'):
-            del self.decomp_comps
-        if hasattr(self, 'decomp_loadings'):
-            del self.decomp_loadings
-        flatten_kwargs = {}
-        if 'key' in list(kwargs.keys()):
-            flatten_kwargs['key'] = kwargs.pop('key')
-
-        self.decomp = PCA(**kwargs)
-        self.decomp.fit(self.flatten(**flatten_kwargs))
-        self.decomp_comps = self.decomp.components_
-
-    def plot_explained_variance_ratio(self, newfig=True):
-        assert hasattr(self, 'decomp')
-        assert isinstance(self.decomp, PCA)
-        assert hasattr(self.decomp, 'explained_variance_ratio_')
-        if newfig:
-            plt.figure()
-        xvals = np.array(range(len(self.decomp.explained_variance_ratio_))) + 1
-        plt.semilogy(xvals, self.decomp.explained_variance_ratio_, 'b.')
-        plt.xlabel('component')
-        plt.ylabel('explained variance ratio')
-
-    def transform_decomp(self, **kwargs):
-        assert hasattr(self, 'decomp')
-        if hasattr(self, 'decomp_result'):
-            del self.decomp_result
-
-        flatten_kwargs = {}
-        if 'key' in list(kwargs.keys()):
-            flatten_kwargs['key'] = kwargs.pop('key')
-
-        self.decomp_loadings = self.decomp.transform(
-            self.flatten(**flatten_kwargs))
-
-    def blind_source_separation(self, **kwargs):
-        assert hasattr(self, 'decomp')
-        assert isinstance(self.decomp, PCA)
-        if hasattr(self, 'ica'):
-            del self.ica
-            del self.ica_comps
-            del self.ica_loadings
-
-        if 'number_of_components' in list(kwargs.keys()):
-            kwargs['n_components'] = kwargs.pop('number_of_components')
-
-        if 'on_loadings' in list(kwargs.keys()):
-            kwargs.pop('on_loadings')
-
-        key_kwarg = {}
-        if 'key' in list(kwargs.keys()):
-            key_kwarg['key'] = kwargs.pop('key')
-
-        self.ica = FastICA(**kwargs)
-        self.ica_loadings = self.reshape(
-            self.ica.fit_transform(self.decomp_loadings, **key_kwarg))
-        self.ica_comps = np.dot(self.ica.mixing_.T, self.decomp.components_)
-
-    def get_bss_loadings(self):
-        assert hasattr(self, "ica_loadings")
-        return self.ica_loadings
-
-    def get_bss_factors(self):
-        assert hasattr(self, 'ica_comps')
-        return self.ica_comps
-
-    def decomposition(self, **kwargs):
-        assert 'algorithm' in list(kwargs.keys())
-        algorithm = kwargs.pop('algorithm')
-
-        assert 'output_dimension' in list(kwargs.keys())
-        kwargs['n_components'] = kwargs.pop('output_dimension')
-
-        key_kwarg = {}
-        if 'key' in list(kwargs.keys()):
-            key_kwarg['key'] = kwargs['key']
-
-        if algorithm == 'svd':
-            self.fit_pca(**kwargs)
-        elif algorithm == 'nmf':
-            self.fit_nmf(**kwargs)
-        else:
-            raise Exception('Invalid algorithm')
-
-        self.transform_decomp(**key_kwarg)
-
-    def get_decomposition_loadings(self):
-        assert hasattr(self, 'decomp')
-        assert hasattr(self.decomp_loadings)
-        return self.reshape(self.decomp_loadings)
-
-    def get_decomposition_factors(self):
-        assert hasattr(self, 'decomp')
-        return self.decomp_comps
-
-    def fit_nmf(self, **kwargs):
-        if hasattr(self, 'decomp'):
-            del self.decomp
-            del self.decomp_comps
-        if hasattr(self, 'decomp_loadings'):
-            del self.decomp_loadings
-        flatten_kwargs = {}
-        if 'key' in list(kwargs.keys()):
-            flatten_kwargs['key'] = kwargs.pop('key')
-
-        self.decomp = NMF(**kwargs)
-        self.decomp_comps = self.decomp.components_
-        self.decomp.fit(self.flatten(**flatten_kwargs))
